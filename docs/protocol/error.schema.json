@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://krite.dev/protocol/v1/error.schema.json",
+  "title": "Krite Protocol v1 Error",
+  "type": "object",
+  "required": ["error"],
+  "additionalProperties": false,
+  "properties": {
+    "error": {
+      "type": "object",
+      "required": ["type", "message", "param"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "invalid_request",
+            "state_too_long",
+            "too_many_questions",
+            "too_many_options",
+            "unknown_model",
+            "internal_error"
+          ]
+        },
+        "message": { "type": "string", "minLength": 1 },
+        "param": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

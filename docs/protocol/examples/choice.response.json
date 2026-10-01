@@ -1,0 +1,18 @@
+{
+  "model": "krite-0.15b-v1",
+  "answers": {
+    "route": {
+      "type": "choice",
+      "choice": "billing",
+      "probabilities": {
+        "billing": 0.62,
+        "technical": 0.21,
+        "account": 0.12,
+        "other": 0.05
+      },
+      "confidence": 0.258
+    }
+  },
+  "usage": { "input_tokens": 87, "output_tokens": 0 },
+  "latency_ms": 4.2
+}

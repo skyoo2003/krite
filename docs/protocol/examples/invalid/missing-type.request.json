@@ -1,0 +1,9 @@
+{
+  "state": "Hi, I was charged twice for my March subscription.",
+  "questions": {
+    "route": {
+      "instructions": "Which team should handle this support ticket?",
+      "criteria": { "billing": null, "technical": null }
+    }
+  }
+}
