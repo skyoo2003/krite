@@ -1,0 +1,31 @@
+{
+  "model": "krite-0.15b-v1",
+  "state": {
+    "ticket": {
+      "subject": "Double charge on March invoice",
+      "body": "I was billed twice for the Pro plan this month. Please refund the duplicate charge as soon as possible."
+    },
+    "customer": { "plan": "pro" }
+  },
+  "questions": {
+    "route": {
+      "type": "choice",
+      "instructions": "Which team should handle this support ticket?",
+      "criteria": {
+        "billing": "Charges, invoices, refunds, payment methods",
+        "technical": "Bugs, errors, outages, integrations",
+        "account": null,
+        "other": null
+      }
+    },
+    "urgency": {
+      "type": "score",
+      "instructions": "How urgent is this ticket for the customer?",
+      "criteria": ["low", "medium", "high", "critical"]
+    },
+    "refund_requested": {
+      "type": "noul",
+      "instructions": "Does the customer explicitly ask for a refund?"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "model": "krite-0.15b-v1",
+  "state": "Hi, I was charged twice for my March subscription. Both charges show up on my card statement on the same day. Can you check and fix this?",
+  "questions": {
+    "route": {
+      "type": "choice",
+      "instructions": "Which team should handle this support ticket?",
+      "criteria": {
+        "billing": "Charges, invoices, refunds, payment methods",
+        "technical": "Bugs, errors, outages, integrations",
+        "account": null,
+        "other": null
+      }
+    }
+  }
+}

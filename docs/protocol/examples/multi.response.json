@@ -1,0 +1,31 @@
+{
+  "model": "krite-0.15b-v1",
+  "answers": {
+    "route": {
+      "type": "choice",
+      "choice": "billing",
+      "probabilities": {
+        "billing": 0.7,
+        "technical": 0.08,
+        "account": 0.17,
+        "other": 0.05
+      },
+      "confidence": 0.349
+    },
+    "urgency": {
+      "type": "score",
+      "score": 1.65,
+      "legend": { "0": "low", "1": "medium", "2": "high", "3": "critical" },
+      "probabilities": {
+        "low": 0.1,
+        "medium": 0.3,
+        "high": 0.45,
+        "critical": 0.15
+      },
+      "confidence": 0.109
+    },
+    "refund_requested": { "type": "noul", "noul": 0.81 }
+  },
+  "usage": { "input_tokens": 142, "output_tokens": 0 },
+  "latency_ms": 6.8
+}

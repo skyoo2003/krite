@@ -1,0 +1,10 @@
+{
+  "state": "Hi, I was charged twice for my March subscription.",
+  "questions": {
+    "urgency": {
+      "type": "score",
+      "instructions": "How urgent is this ticket for the customer?",
+      "criteria": { "low": null, "high": null }
+    }
+  }
+}
