@@ -134,6 +134,8 @@ Results are JSONL, one line per cell.
 
 Optional latency fields: `truncated` (n reduced to 50 because 220 calls would exceed 15 minutes), `interleaved_with` (engines interleaved per call), `error_rate`, `therm_before`/`therm_after` (`pmset -g therm`), and for sustained mode `window_p50_ms` (per 60 s window) and `last_minute_p50_ms`. Startup rows add `probe`: the harness times `serve.sh` from process launch until its readiness probe (a one-question noul request, polled every 0.2 s) returns 200, which approximates §3 `startup` with a smaller request than the primary cell. `p50_ms` and the other percentiles are `null` when no measured call succeeded.
 
+Encoder model-layer rows (`krite-bench encoder`) time one state-encoder forward pass on identical token ids, with device synchronization, and carry `component: "encoder"`, `questions` and `options` of 0, and `decisions_per_sec` null. Krite's encoder (Candle) is compared with the same mmBERT-small backbone on torch, recorded under engine `classifier` (its backbone, backend, and precision). Krite rows add `max_abs_diff_vs_torch`, the largest absolute difference of sampled hidden-state values against torch; the run fails above 1e-4 (fp32), because the two timings would then not describe the same computation.
+
 Other result files share `engine`, `model`, `backend`, `precision`, `commit`, and `timestamp`:
 
 | File | One line per | Fields |

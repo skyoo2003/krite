@@ -78,6 +78,15 @@ start = "cbjev-serve"
 dialect = "jev"  # routes English vs. multilingual weights itself (response `routing` field)
 env = { CBJEV_DEVICE = "mps", CBJEV_PRELOAD = "1" }
 
+# Krite itself. Build first with `cargo build --release -p krite-cli` at the repo root.
+[krite]
+port = 8110
+venv = false
+model = "krite-0.15b-v0"
+backend = "candle-metal"
+precision = "fp32"
+start = "../../target/release/krite serve --port 8110"
+
 [classifier]
 port = 8105
 venv = true

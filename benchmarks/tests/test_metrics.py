@@ -1,8 +1,10 @@
 import math
 
 import numpy as np
+import pytest
 
 from krite_bench import metrics as m
+from krite_bench import runners
 
 
 def test_ece_calibrated_is_near_zero():
@@ -87,3 +89,28 @@ def test_calibration_split_is_keyed_on_case_index():
     without = m.pooled_calibration({"s": ([p for p in preds if p["index"] != fit_case], 20)})["s"]
     # Losing a fit-half case must not reshuffle the evaluation half.
     assert without["raw_eval_half"] == full["raw_eval_half"]
+
+
+def _encoder_out(backend: str, probe_shift: float) -> dict:
+    probe = [[0.1 + probe_shift] * 8, [0.2] * 8, [0.3] * 8]
+    return {
+        "backend": backend,
+        "precision": "fp32",
+        "results": {"64": {"times_ms": [1.0, 2.0, 3.0], "truncated": False, "probe": probe}},
+    }
+
+
+def test_encoder_rows_are_model_layer_and_parity_checked():
+    rows = runners.encoder_rows(
+        {"krite": _encoder_out("candle-metal", 5e-5), "classifier": _encoder_out("torch-mps", 0.0)}, "env.json"
+    )
+    by_engine = {r["engine"]: r for r in rows}
+    k = by_engine["krite"]
+    assert (k["layer"], k["state_tokens"], k["questions"], k["decisions_per_sec"]) == ("model", 64, 0, None)
+    assert (k["backend"], k["p50_ms"], k["component"]) == ("candle-metal", 2.0, "encoder")
+    assert math.isclose(k["max_abs_diff_vs_torch"], 5e-5, rel_tol=1e-6)
+    assert "max_abs_diff_vs_torch" not in by_engine["classifier"]
+    with pytest.raises(RuntimeError, match="differs from torch"):
+        runners.encoder_rows(
+            {"krite": _encoder_out("candle-metal", 1e-3), "classifier": _encoder_out("torch-mps", 0.0)}, "e"
+        )

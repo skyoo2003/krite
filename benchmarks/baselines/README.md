@@ -2,7 +2,8 @@
 
 Every engine runs as its own process in its own environment and is measured only through
 `POST /v1/systemone` (Protocol v1). The harness (`krite-bench`) contains no ML code, so engine
-dependency pins never conflict, and `krite serve` will be measured the same way.
+dependency pins never conflict, and `krite serve` is measured the same way (engine `krite`; see
+[docs/runtime.md](../../docs/runtime.md)).
 
 ```bash
 benchmarks/baselines/setup.sh <engine>     # isolated env under .venvs/<engine> (gitignored)
@@ -17,6 +18,7 @@ benchmarks/baselines/serve.sh <engine>     # start on its port; waits for the fi
 | `semif` | `Qwen/Qwen3-0.6B` | `shims/semif_shim.py` over SemIf's shared-prefix scorer | 8103 | torch MPS, bf16 | MIT |
 | `cbjev` | `0010101010-1/cbjev` | its own server (`cbjev-serve`), black box | 8000 | `CBJEV_DEVICE=mps` | **GPL-3.0** |
 | `classifier` | `jhu-clsp/mmBERT-small` + per-dataset head | `shims/classifier_shim.py`; trained by `classifier_train.py` | 8105 | torch MPS | MIT (base) |
+| `krite` | `krite-0.15b-v0` (mmBERT-small encoder, temporary head) | `target/release/krite serve`; build with `cargo build --release -p krite-cli` | 8110 | Candle Metal | Apache-2.0 |
 | `fake`, `fake-biased` | none | `shims/fake_shim.py` (tests) | 8199, 8198 | — | — |
 
 Exact versions are in `engines.toml` (git commits, Hugging Face revisions) and in each

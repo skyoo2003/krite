@@ -1,0 +1,21 @@
+[package]
+name = "krite-cli"
+description = "krite command line: serve Protocol v1, time the encoder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "krite"
+path = "src/main.rs"
+
+[dependencies]
+krite-candle.workspace = true
+krite-runtime.workspace = true
+krite-server.workspace = true
+anyhow.workspace = true
+candle-core.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

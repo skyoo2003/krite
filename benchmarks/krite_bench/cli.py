@@ -50,6 +50,9 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--cache", choices=["cold", "warm", "startup"], default="cold")
     p.add_argument("--seconds", type=int, default=600)
 
+    p = sub.add_parser("encoder", help="model-layer encoder timings: Candle vs torch on identical token ids")
+    p.add_argument("--tokens", default="64,512,2048", help="comma-separated sequence lengths")
+
     p = sub.add_parser("report", help="render docs/baselines.md tables")
     p.add_argument("--dest", type=Path, default=data.ROOT / "docs" / "baselines.md")
 
@@ -93,6 +96,8 @@ def main(argv: list[str] | None = None) -> None:
                 runners.run_sustained(e, a.seconds, a.out)
         else:
             runners.run_burst(engines, a.cells, a.cache, a.out)
+    elif a.cmd == "encoder":
+        runners.run_encoder(a.tokens, a.out)
     elif a.cmd == "report":
         from . import report
 

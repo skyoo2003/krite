@@ -1,0 +1,19 @@
+[package]
+name = "krite-server"
+description = "Krite HTTP server: POST /v1/systemone (Protocol v1)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+krite-core.workspace = true
+krite-runtime.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+sha2.workspace = true
+tower.workspace = true
