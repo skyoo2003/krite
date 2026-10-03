@@ -1,2 +1,12 @@
 .claude/
 .serena/
+
+# Benchmark harness: engine envs, vendored engine repos, checkpoints, and dataset text stay local.
+benchmarks/baselines/.venvs/
+benchmarks/baselines/vendor/
+benchmarks/baselines/classifier_ckpt/
+benchmarks/data/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+.venv/

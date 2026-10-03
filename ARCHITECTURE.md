@@ -59,7 +59,7 @@ Argmax ties are broken by **ascending Unicode codepoint order of the names**, no
 
 ## 4. Architectural Invariants
 
-Tolerance is 1e-5 for fp32 and 1e-3 for fp16/bf16 (absolute). Tests are written in M2/M3.
+Tolerance is 1e-5 for fp32 and 1e-3 for fp16/bf16 (absolute). Tests are written with the runtime and model code.
 
 | ID | Invariant | How to verify |
 |---|---|---|
