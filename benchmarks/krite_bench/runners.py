@@ -446,6 +446,53 @@ def run_startup(engine: str, out: Path = RESULTS_DIR) -> None:
     append(out / "latency.jsonl", row)
 
 
+# --- encoder model layer ------------------------------------------------------------------------
+
+ENCODER_TOL = 1e-4  # fp32 parity between Candle and torch on identical token ids
+ENCODER_REFERENCE = "classifier"  # the mmBERT-small backbone on torch (same weights as Krite's encoder)
+
+
+def encoder_rows(results: dict[str, dict], env_ref: str) -> list[dict]:
+    """Model-layer rows (spec §2) from `krite bench-encoder` and `encoder_torch.py` output.
+
+    `results` maps engine name to that output. Krite rows carry the max |Δ| of the hidden-state probe
+    against the torch reference; a difference above ENCODER_TOL raises, since then the timings do not
+    describe the same computation.
+    """
+    ref = results[ENCODER_REFERENCE]["results"]
+    rows = []
+    for engine, res in results.items():
+        for tokens, r in res["results"].items():
+            extra = {"component": "encoder", "truncated": r["truncated"], "power_source": power_source()}
+            extra |= {"backend": res["backend"], "precision": res["precision"]}
+            if engine != ENCODER_REFERENCE:
+                diff = float(np.max(np.abs(np.array(r["probe"]) - np.array(ref[tokens]["probe"]))))
+                if diff > ENCODER_TOL:
+                    raise RuntimeError(f"{engine} encoder differs from torch by {diff} at {tokens} tokens")
+                extra["max_abs_diff_vs_torch"] = diff
+            times = r["times_ms"]
+            cell = (int(tokens), 0, 0)
+            rows.append(latency_row(engine, "model", "cold", "burst", cell, times, 0, sum(times), env_ref, extra))
+    return rows
+
+
+def run_encoder(tokens: str = "64,512,2048", out: Path = RESULTS_DIR) -> None:
+    """Candle (`krite bench-encoder`), then torch (`encoder_torch.py`), one at a time; no engine may be serving."""
+    root = Path(__file__).resolve().parents[2]
+    baselines = root / "benchmarks" / "baselines"
+    torch_python = baselines / ".venvs" / ENCODER_REFERENCE / "bin" / "python"
+    cmds = {
+        "krite": [str(root / "target" / "release" / "krite"), "bench-encoder", "--tokens", tokens],
+        ENCODER_REFERENCE: [str(torch_python), str(baselines / "encoder_torch.py"), "--tokens", tokens],
+    }
+    results = {}
+    for engine, cmd in cmds.items():
+        results[engine] = json.loads(subprocess.run(cmd, check=True, capture_output=True, text=True).stdout)
+    for row in encoder_rows(results, latest(out)):
+        append(out / "latency.jsonl", row)
+        print(f"{row['engine']} {row['state_tokens']} tokens: p50={row['p50_ms']:.1f} ms", flush=True)
+
+
 # --- memory -------------------------------------------------------------------------------------
 
 

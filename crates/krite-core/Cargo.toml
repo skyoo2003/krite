@@ -1,0 +1,11 @@
+[package]
+name = "krite-core"
+description = "Krite Protocol v1 types and validation (no ML dependencies)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

@@ -4,7 +4,7 @@ Five baseline engines measured on one MacBook Air 13 (Apple M4, 16 GB, fanless) 
 [benchmark-spec](benchmark-spec.md), with the harness in [`benchmarks/`](../benchmarks) and the
 engines described in [`benchmarks/baselines/`](../benchmarks/baselines/README.md). Raw results are
 in [`benchmarks/results/baselines/`](../benchmarks/results/baselines). Every engine is measured through
-`POST /v1/systemone` only, so `krite serve` will be measured the same way.
+`POST /v1/systemone` only, and `krite serve` is measured the same way ([runtime.md](runtime.md)).
 
 Read the tables with these caveats:
 

@@ -1,0 +1,27 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/skyoo2003/krite"
+
+[workspace.dependencies]
+krite-core = { path = "crates/krite-core" }
+krite-runtime = { path = "crates/krite-runtime" }
+krite-candle = { path = "crates/krite-candle" }
+krite-server = { path = "crates/krite-server" }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+# float_roundtrip: exact number parsing, so the RFC 8785 state string is exact
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha2 = "0.10"
+candle-core = "0.11"
+candle-nn = "0.11"
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+tower = { version = "0.5", features = ["util"] }
+clap = { version = "4", features = ["derive"] }
