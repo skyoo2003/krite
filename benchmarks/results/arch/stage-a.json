@@ -1,0 +1,49 @@
+{
+  "base": {
+    "arch-late8": 1.416452546015456,
+    "arch-late8-s14": 1.9019233312618675
+  },
+  "new": {
+    "arch-late8-broad": 0.7826013668949743,
+    "arch-late8-broad-s14": 0.6056036418515355
+  },
+  "rules": {
+    "shortfall gain": {
+      "value": 0.9650854342654067,
+      "pass": true
+    },
+    "seed agreement": {
+      "value": [],
+      "pass": true
+    },
+    "in-domain drop": {
+      "value": -0.005520833333333308,
+      "pass": true
+    },
+    "I1 flip rate (arch-late8-broad)": {
+      "value": 0.0,
+      "pass": true
+    },
+    "invariance_max_dev (arch-late8-broad)": {
+      "value": 1.9135313947815646e-06,
+      "pass": true
+    },
+    "interference_max_dev (arch-late8-broad)": {
+      "value": 5.447137587655249e-07,
+      "pass": true
+    },
+    "I1 flip rate (arch-late8-broad-s14)": {
+      "value": 0.0,
+      "pass": true
+    },
+    "invariance_max_dev (arch-late8-broad-s14)": {
+      "value": 1.810940552737783e-06,
+      "pass": true
+    },
+    "interference_max_dev (arch-late8-broad-s14)": {
+      "value": 9.195065682199299e-07,
+      "pass": true
+    }
+  },
+  "adopt": true
+}
