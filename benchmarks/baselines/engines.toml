@@ -97,3 +97,158 @@ precision = "fp32"
 request_model = "classifier-{dataset}"
 install = "uv pip install torch transformers accelerate pyarrow"
 start = "python shims/classifier_shim.py --port 8105"
+
+# Architecture-study arms (docs/architecture-study.md), served from training/ckpt/<arm>.
+# Train first: scripts/arch-study.sh. All arms share the arch-b environment.
+[arch-b]
+port = 8120
+venv = true
+model = "arch-b"
+backend = "torch-mps"
+precision = "fp32"
+install = "uv pip install -e ../../benchmarks -e ../../training"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/b --port 8120"
+
+[arch-d1]
+port = 8121
+venv = true
+venv_from = "arch-b"
+model = "arch-d1"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/d1 --port 8121"
+
+[arch-d2]
+port = 8122
+venv = true
+venv_from = "arch-b"
+model = "arch-d2"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/d2 --port 8122"
+
+[arch-d4]
+port = 8123
+venv = true
+venv_from = "arch-b"
+model = "arch-d4"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/d4 --port 8123"
+
+[arch-d2-emb]
+port = 8124
+venv = true
+venv_from = "arch-b"
+model = "arch-d2-emb"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/d2-emb --port 8124"
+
+[arch-d2-nocache]
+port = 8125
+venv = true
+venv_from = "arch-b"
+model = "arch-d2-nocache"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/d2 --no-state-cache --port 8125"
+
+[arch-d1-pool]
+port = 8126
+venv = true
+venv_from = "arch-b"
+model = "arch-d1-pool"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/d1-pool --port 8126"
+
+[arch-d1-lr]
+port = 8127
+venv = true
+venv_from = "arch-b"
+model = "arch-d1-lr"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/d1-lr --port 8127"
+
+[arch-d1-set]
+port = 8128
+venv = true
+venv_from = "arch-b"
+model = "arch-d1-set"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/d1-set --port 8128"
+
+[arch-late4]
+port = 8129
+venv = true
+venv_from = "arch-b"
+model = "arch-late4"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/late4 --port 8129"
+
+[arch-late4-nocache]
+port = 8130
+venv = true
+venv_from = "arch-b"
+model = "arch-late4-nocache"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/late4 --port 8130 --no-state-cache"
+
+[arch-late8]
+port = 8131
+venv = true
+venv_from = "arch-b"
+model = "arch-late8"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/late8 --port 8131"
+
+[arch-late4-s14]
+port = 8132
+venv = true
+venv_from = "arch-b"
+model = "arch-late4-s14"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/late4-s14 --port 8132"
+
+[arch-b-s14]
+port = 8133
+venv = true
+venv_from = "arch-b"
+model = "arch-b-s14"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/b-s14 --port 8133"
+
+[arch-late8-nocache]
+port = 8134
+venv = true
+venv_from = "arch-b"
+model = "arch-late8-nocache"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/late8 --port 8134 --no-state-cache"
+
+[arch-late6]
+port = 8135
+venv = true
+venv_from = "arch-b"
+model = "arch-late6"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/late6 --port 8135"
+
+[arch-late8-s14]
+port = 8136
+venv = true
+venv_from = "arch-b"
+model = "arch-late8-s14"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/late8-s14 --port 8136"

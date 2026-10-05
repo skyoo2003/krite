@@ -1,0 +1,124 @@
+{
+  "arms": {
+    "arch-b": {
+      "acc_in_domain": 0.879375,
+      "acc_held_out": 0.7258333333333334,
+      "qwk": -0.035354122841158464,
+      "warm_p50_ms": 58.8460415
+    },
+    "arch-d1": {
+      "acc_in_domain": 0.4454166666666666,
+      "acc_held_out": 0.4791666666666667,
+      "qwk": -0.006452432402479248,
+      "warm_p50_ms": 13.9275
+    },
+    "arch-d2": {
+      "acc_in_domain": 0.38916666666666666,
+      "acc_held_out": 0.47805555555555557,
+      "qwk": -0.007699769711382516,
+      "warm_p50_ms": 14.3440625
+    },
+    "arch-d4": {
+      "acc_in_domain": 0.3279166666666667,
+      "acc_held_out": 0.4683333333333333,
+      "qwk": -0.005491502485490463,
+      "warm_p50_ms": 16.433145500000002
+    },
+    "arch-d2-emb": {
+      "acc_in_domain": 0.25937499999999997,
+      "acc_held_out": 0.4683333333333333,
+      "qwk": -0.0073150979433162745,
+      "warm_p50_ms": 4.701563
+    },
+    "arch-d1-pool": {
+      "acc_in_domain": 0.8489583333333334,
+      "acc_held_out": 0.6305555555555555,
+      "qwk": -0.065442489686917,
+      "warm_p50_ms": 13.956937499999999
+    },
+    "arch-d1-lr": {
+      "acc_in_domain": 0.38187499999999996,
+      "acc_held_out": 0.4769444444444445,
+      "qwk": 0.07701437605034944,
+      "warm_p50_ms": 13.894
+    },
+    "arch-d1-set": {
+      "acc_in_domain": 0.5702083333333333,
+      "acc_held_out": 0.495,
+      "qwk": 0.0019843404537152848,
+      "warm_p50_ms": 13.947374499999999
+    },
+    "arch-late4": {
+      "acc_in_domain": 0.8852083333333334,
+      "acc_held_out": 0.6902777777777778,
+      "qwk": -0.03727314942964683,
+      "warm_p50_ms": 6.85525
+    },
+    "arch-late8": {
+      "acc_in_domain": 0.876875,
+      "acc_held_out": 0.7083333333333334,
+      "qwk": 0.26351819583014924,
+      "warm_p50_ms": 6.1856455
+    },
+    "arch-late6": {
+      "acc_in_domain": 0.8689583333333334,
+      "acc_held_out": 0.6977777777777778,
+      "qwk": 0.16720315625624424,
+      "warm_p50_ms": 8.9984795
+    }
+  },
+  "d_best": "arch-late8",
+  "rules": {
+    "Q1 in-domain accuracy gap (B - D)": {
+      "value": 0.0025000000000000577,
+      "pass": true
+    },
+    "Q1 held-out accuracy gap (B - D)": {
+      "value": 0.01750000000000007,
+      "pass": true
+    },
+    "Q2 score QWK gap (B - D)": {
+      "value": -0.2988723186713077,
+      "pass": true
+    },
+    "L1 D warm p50 x 5 / B warm p50": {
+      "value": 0.525578725631018,
+      "pass": true
+    },
+    "I1 flip rate": {
+      "value": 0.0,
+      "pass": true
+    },
+    "I1 invariance max dev": {
+      "value": 2.343582387265286e-06,
+      "pass": true
+    },
+    "I2 interference max dev": {
+      "value": 6.697047105208576e-07,
+      "pass": true
+    },
+    "I3 cache on/off max dev (arch-late8)": {
+      "value": 1.4123587099845736e-06,
+      "pass": true
+    }
+  },
+  "accept_d": true,
+  "rerun_seed_14": false,
+  "seed_14": {
+    "arch-b-s14": {
+      "acc_in_domain": 0.8741666666666666,
+      "acc_held_out": 0.7016666666666667,
+      "qwk": 0.06768721985998236
+    },
+    "arch-late4-s14": {
+      "acc_in_domain": 0.8197916666666667,
+      "acc_held_out": 0.5247222222222222,
+      "qwk": 0.025904966881035243
+    },
+    "arch-late8-s14": {
+      "acc_in_domain": 0.8735416666666667,
+      "acc_held_out": 0.6830555555555555,
+      "qwk": 0.07453639660108421
+    }
+  }
+}

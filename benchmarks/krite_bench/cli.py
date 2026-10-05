@@ -55,6 +55,7 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("report", help="render docs/baselines.md tables")
     p.add_argument("--dest", type=Path, default=data.ROOT / "docs" / "baselines.md")
+    p.add_argument("--engines", help="comma-separated engines to tabulate (default: the baselines)")
 
     a = ap.parse_args(argv)
     if a.cmd == "data":
@@ -101,7 +102,7 @@ def main(argv: list[str] | None = None) -> None:
     elif a.cmd == "report":
         from . import report
 
-        report.write(a.out, a.dest)
+        report.write(a.out, a.dest, tuple(a.engines.split(",")) if a.engines else report.ENGINES)
         print(a.dest)
 
 
