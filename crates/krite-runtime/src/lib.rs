@@ -11,7 +11,15 @@ use krite_core::{Answer, ApiError, ErrorType, Limits, Ordered, Request, Response
 use sha2::{Digest, Sha256};
 
 pub use cache::StateCache;
-pub use calibrate::{Calibrator, bucket};
+pub use calibrate::{BUCKETS, Calibrator, bucket};
+
+/// One candidate as the backend sees it: its question type and its ids from `Backend::candidate_ids`.
+/// No question id: ids are not model inputs (I4).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Candidate {
+    pub kind: &'static str,
+    pub ids: Vec<u32>,
+}
 
 /// A model backend. The state encoder never sees questions, so its output can be cached across requests.
 pub trait Backend: Send + 'static {
@@ -25,8 +33,13 @@ pub trait Backend: Send + 'static {
     fn tokenize(&self, text: &str, special_tokens: bool) -> anyhow::Result<Vec<u32>>;
     fn encode(&mut self, state_ids: &[u32]) -> anyhow::Result<Self::State>;
     fn state_bytes(state: &Self::State) -> usize;
-    /// One energy per candidate; each depends only on the state and that candidate's own ids.
-    fn energies(&mut self, state: &Self::State, candidates: &[Vec<u32>]) -> anyhow::Result<Vec<f32>>;
+    /// Model input for each criterion `(name, desc)` of one question (`desc` is None when absent or empty).
+    /// One call per question, so shared instructions are processed once and the work stays linear in
+    /// the request body.
+    fn candidate_ids(&self, instructions: &str, criteria: &[(String, Option<String>)])
+    -> anyhow::Result<Vec<Vec<u32>>>;
+    /// One energy per candidate; each depends only on the state and that candidate alone.
+    fn energies(&mut self, state: &Self::State, candidates: &[Candidate]) -> anyhow::Result<Vec<f32>>;
 }
 
 /// Per-stage milliseconds for the `x-krite-timing` header.
@@ -164,14 +177,14 @@ impl<B: Backend> Runtime<B> {
         let mut texts = Vec::new();
         let mut candidate_tokens = 0;
         for q in req.questions.values() {
-            let cands = q.candidates();
+            let cands: Vec<(String, Option<String>)> =
+                q.candidates().into_iter().map(|(n, d)| (n, d.filter(|d| !d.is_empty()))).collect();
             spans.push((texts.len(), cands.len()));
-            for (name, desc) in cands {
-                let text = match desc {
-                    Some(d) if !d.is_empty() => format!("{}\n{name}: {d}", q.instructions()),
-                    _ => format!("{}\n{name}", q.instructions()),
-                };
-                let ids = self.backend.tokenize(&text, false).map_err(internal)?;
+            let ids = self.backend.candidate_ids(q.instructions(), &cands).map_err(internal)?;
+            if ids.len() != cands.len() {
+                return Err(ApiError::internal(format!("{} inputs for {} criteria", ids.len(), cands.len())));
+            }
+            for ids in ids {
                 candidate_tokens += ids.len();
                 if candidate_tokens > self.limits.max_candidate_tokens {
                     let msg = format!(
@@ -180,7 +193,7 @@ impl<B: Backend> Runtime<B> {
                     );
                     return Err(ApiError::invalid(msg, Some("questions".into())));
                 }
-                texts.push(ids);
+                texts.push(Candidate { kind: q.kind(), ids });
             }
         }
         timing.tokenize_ms = ms(t);
@@ -214,7 +227,7 @@ impl<B: Backend> Runtime<B> {
         }
         timing.calibrate_ms = ms(t);
 
-        let input_tokens = (state_ids.len() + texts.iter().map(Vec::len).sum::<usize>()) as u64;
+        let input_tokens = (state_ids.len() + texts.iter().map(|c| c.ids.len()).sum::<usize>()) as u64;
         let response = Response {
             model: self.backend.model_id().to_string(),
             answers,
@@ -234,6 +247,8 @@ mod tests {
     /// Deterministic, weight-free backend: each energy hashes (state ids, candidate ids).
     struct HashBackend {
         encodes: usize,
+        /// Calls that turn a question's instructions into model input.
+        instruction_calls: std::cell::Cell<usize>,
     }
 
     impl Backend for HashBackend {
@@ -258,11 +273,25 @@ mod tests {
         fn state_bytes(s: &Vec<u32>) -> usize {
             s.len() * 4
         }
-        fn energies(&mut self, s: &Vec<u32>, cands: &[Vec<u32>]) -> anyhow::Result<Vec<f32>> {
+        fn candidate_ids(
+            &self,
+            instructions: &str,
+            criteria: &[(String, Option<String>)],
+        ) -> anyhow::Result<Vec<Vec<u32>>> {
+            self.instruction_calls.set(self.instruction_calls.get() + 1);
+            criteria
+                .iter()
+                .map(|(name, desc)| match desc {
+                    Some(d) => self.tokenize(&format!("{instructions}\n{name}: {d}"), false),
+                    None => self.tokenize(&format!("{instructions}\n{name}"), false),
+                })
+                .collect()
+        }
+        fn energies(&mut self, s: &Vec<u32>, cands: &[Candidate]) -> anyhow::Result<Vec<f32>> {
             Ok(cands
                 .iter()
                 .map(|c| {
-                    let h = Sha256::new().chain_update(format!("{s:?}|{c:?}")).finalize();
+                    let h = Sha256::new().chain_update(format!("{s:?}|{}|{:?}", c.kind, c.ids)).finalize();
                     u32::from_be_bytes([h[0], h[1], h[2], h[3]]) as f32 / u32::MAX as f32 * 4.0
                 })
                 .collect())
@@ -270,7 +299,7 @@ mod tests {
     }
 
     fn rt() -> Runtime<HashBackend> {
-        Runtime::new(HashBackend { encodes: 0 }, 1 << 20)
+        Runtime::new(HashBackend { encodes: 0, instruction_calls: Default::default() }, 1 << 20)
     }
 
     fn decide(rt: &mut Runtime<HashBackend>, v: Value) -> Result<Decision, ApiError> {
@@ -378,6 +407,17 @@ mod tests {
         assert_eq!(r.backend().encodes, 0);
         let mut r = rt().with_limits(Limits { max_candidate_tokens: 100, ..Limits::default() });
         assert!(decide(&mut r, json!({"state": "s", "questions": {"q": route()}})).is_ok());
+    }
+
+    #[test]
+    fn instructions_are_processed_once_per_question() {
+        // Tokenization work must stay linear in the request body: 255 criteria must not repeat
+        // the (possibly long) instructions 255 times.
+        let criteria: serde_json::Map<String, Value> = (0..255).map(|i| (format!("c{i}"), Value::Null)).collect();
+        let q = json!({"type": "choice", "instructions": "Pick one.", "criteria": criteria});
+        let mut r = rt();
+        decide(&mut r, json!({"state": "s", "questions": {"a": q.clone(), "b": q}})).unwrap();
+        assert_eq!(r.backend().instruction_calls.get(), 2);
     }
 
     #[test]

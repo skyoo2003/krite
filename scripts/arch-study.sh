@@ -41,7 +41,7 @@ for engine in $ENGINES; do
   if [[ "$engine" == *-nocache ]]; then
     kb quality --engine "$engine" --suites "$CACHE_SUITES"
   else
-    if [[ "$engine" == arch-b || "$engine" == arch-d2 || "$engine" == arch-late4 ]]; then
+    if [[ "$engine" == arch-b || "$engine" == arch-d2 || "$engine" == arch-late4 || "$engine" == krite ]]; then
       kb latency --engines "$engine" --mode sustained
     fi
     kb quality --engine "$engine" --memory
@@ -66,6 +66,6 @@ done
 for engine in $ENGINES; do
   if [[ "$engine" == *-nocache ]]; then study compare --a "${engine%-nocache}" --b "$engine"; fi
 done
-REPORT="${REPORT-arch-b arch-d1 arch-d2 arch-d4 arch-d2-emb arch-d2-nocache arch-d1-pool arch-d1-lr arch-d1-set arch-late4 arch-late4-nocache arch-late8 arch-late4-s14 arch-b-s14 arch-late8-nocache arch-late6 arch-late8-s14}"
+REPORT="${REPORT-arch-b arch-d1 arch-d2 arch-d4 arch-d2-emb arch-d2-nocache arch-d1-pool arch-d1-lr arch-d1-set arch-late4 arch-late4-nocache arch-late8 arch-late4-s14 arch-b-s14 arch-late8-nocache arch-late6 arch-late8-s14 krite krite-nocache}"
 kb report --engines "${REPORT// /,}" --dest ../docs/architecture-study.md
 study verdict | tee "benchmarks/$OUT/verdict.json"

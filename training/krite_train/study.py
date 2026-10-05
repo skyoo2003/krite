@@ -146,12 +146,13 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--a", default="arch-d2")
     ap.add_argument("--b", default="arch-d2-nocache")
+    ap.add_argument("--tol", type=float, default=TOL, help="compare: max |Δp| allowed")
     a = ap.parse_args()
     if a.cmd == "compare":
         dev = compare(a.out, a.a, a.b)
         print(f"max |Δp| {a.a} vs {a.b}: {dev:.3g}")
-        if dev > TOL:
-            raise SystemExit(f"FAIL: above {TOL}")
+        if dev > a.tol:
+            raise SystemExit(f"FAIL: above {a.tol}")
     else:
         print(json.dumps(verdict(a.out), indent=2))
 

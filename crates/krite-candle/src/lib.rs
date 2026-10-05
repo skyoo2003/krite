@@ -1,39 +1,34 @@
-//! Candle backend: mmBERT-small (ModernBERT) state encoder on Metal or CPU, plus the slice head.
+//! Candle backend: the late-interaction decision tower (mmBERT-small encoder) on Metal or CPU, loaded
+//! from a model directory written by `training/krite_train/export.py`.
 
+pub mod late;
 pub mod modernbert;
 
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use anyhow::{Context, bail};
+use anyhow::{Context, bail, ensure};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use krite_runtime::Backend;
-use modernbert::{Config, ModernBert};
+use krite_runtime::{Backend, Candidate, StateCache};
+use late::{LateModel, LateState};
+use modernbert::Config;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokenizers::Tokenizer;
 
-pub const MODEL_ID: &str = "krite-0.15b-v0";
-const REPO: &str = "jhu-clsp/mmBERT-small";
-/// config.json and tokenizer.json (this revision ships only pytorch_model.bin).
-const CONFIG_REV: &str = "abc32620dd4f6ab06f5fbe905dc25f310618e09f";
-/// refs/pr/12: model.safetensors converted from the same weights.
-const WEIGHTS_REV: &str = "461475a70b192efcbb760df5541d3825b07c4d5b";
-
-/// A file of `REPO` at `rev` in the local Hugging Face cache.
-fn hub_file(rev: &str, file: &str) -> anyhow::Result<PathBuf> {
-    let hub = std::env::var_os("HF_HUB_CACHE")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HF_HOME").map(|h| PathBuf::from(h).join("hub")))
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache/huggingface/hub")))
-        .context("no HF_HUB_CACHE, HF_HOME, or HOME")?;
-    let path = hub.join(format!("models--{}", REPO.replace('/', "--"))).join("snapshots").join(rev).join(file);
-    if !path.exists() {
-        bail!(
-            "{file} not in the Hugging Face cache; run: uvx --from huggingface_hub hf download {REPO} {file} --revision {rev}"
-        );
-    }
-    Ok(path)
+/// `krite.json` in a model directory.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Manifest {
+    pub model_id: String,
+    pub late_layers: usize,
+    /// Candidate ids per question criterion, `<bos>`/`<eos>` included.
+    pub max_candidate_tokens: usize,
+    /// Ids kept from `"\n" + name[: desc]` before the instructions get the rest.
+    pub max_option_tokens: usize,
+    /// Calibration temperature per bucket; missing buckets use 1.0.
+    pub temperatures: BTreeMap<String, f64>,
 }
 
 /// Metal when available unless `cpu` is set.
@@ -49,36 +44,96 @@ pub fn bench_ids(n: usize) -> Vec<u32> {
     v
 }
 
+/// `<bos> instructions option <eos>` within `max` ids; the option keeps up to `max_option` ids first.
+fn frame(bos: u32, mut ins: Vec<u32>, mut opt: Vec<u32>, eos: u32, max: usize, max_option: usize) -> Vec<u32> {
+    opt.truncate(max_option);
+    ins.truncate(max.saturating_sub(2 + opt.len()));
+    std::iter::once(bos).chain(ins).chain(opt).chain([eos]).collect()
+}
+
+/// Candidate cache key: sha256 of the ids.
+fn ids_key(ids: &[u32]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    for id in ids {
+        h.update(id.to_le_bytes());
+    }
+    h.finalize().into()
+}
+
+fn qtype(kind: &str) -> u32 {
+    match kind {
+        "choice" => 0,
+        "score" => 1,
+        _ => 2,
+    }
+}
+
+fn model_file(dir: &Path, name: &str) -> anyhow::Result<PathBuf> {
+    let path = dir.join(name);
+    if !path.exists() {
+        bail!(
+            "{} missing; export a checkpoint: cd training && uv run python -m krite_train.export --ckpt ckpt/late8",
+            path.display()
+        );
+    }
+    Ok(path)
+}
+
 pub struct CandleBackend {
-    model: ModernBert,
+    model: LateModel,
+    manifest: Manifest,
+    config: Config,
     tokenizer: Tokenizer,
     device: Device,
     tokenizer_version: String,
+    /// Lower-layer candidate states by their ids; a 0-byte budget caches nothing.
+    candidates: StateCache<Tensor>,
 }
 
 impl CandleBackend {
-    pub fn load(device: Device) -> anyhow::Result<Self> {
-        let config: Config = serde_json::from_slice(&std::fs::read(hub_file(CONFIG_REV, "config.json")?)?)?;
-        let tok_path = hub_file(CONFIG_REV, "tokenizer.json")?;
-        let tok_bytes = std::fs::read(&tok_path)?;
+    pub fn load(dir: &Path, device: Device, candidate_cache_bytes: usize) -> anyhow::Result<Self> {
+        let manifest: Manifest =
+            serde_json::from_slice(&std::fs::read(model_file(dir, "krite.json")?)?).context("parse krite.json")?;
+        let config: Config =
+            serde_json::from_slice(&std::fs::read(model_file(dir, "config.json")?)?).context("parse config.json")?;
+        ensure!(
+            manifest.max_candidate_tokens <= config.local_attention / 2,
+            "candidates must fit in half the local attention window ({})",
+            config.local_attention / 2
+        );
+        let tok_bytes = std::fs::read(model_file(dir, "tokenizer.json")?)?;
         let tokenizer = Tokenizer::from_bytes(&tok_bytes).map_err(anyhow::Error::msg)?;
         let tokenizer_version = Sha256::digest(&tok_bytes)[..8].iter().map(|b| format!("{b:02x}")).collect();
-        let weights = hub_file(WEIGHTS_REV, "model.safetensors")?;
-        // SAFETY: the mmapped file is a read-only snapshot in the HF cache that is not modified while serving.
+        let weights = model_file(dir, "model.safetensors")?;
+        // SAFETY: the mmapped file is an exported model file that is not modified while serving.
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[weights], DType::F32, &device)? };
-        // Tied embeddings: the input embedding is stored once, under the decoder name.
-        let vb = vb.rename_f(|n| {
-            if n == "model.embeddings.tok_embeddings.weight" { "decoder.weight".to_string() } else { n.to_string() }
-        });
-        let model = ModernBert::load(vb, &config)?;
-        Ok(Self { model, tokenizer, device, tokenizer_version })
+        let model = LateModel::load(vb, &config, manifest.late_layers, manifest.max_candidate_tokens)?;
+        Ok(Self {
+            model,
+            manifest,
+            config,
+            tokenizer,
+            device,
+            tokenizer_version,
+            candidates: StateCache::new(candidate_cache_bytes),
+        })
+    }
+
+    pub fn temperatures(&self) -> &BTreeMap<String, f64> {
+        &self.manifest.temperatures
     }
 
     /// Compiles the Metal pipelines before the first request (the very first forward takes seconds).
     pub fn warmup(&mut self) -> anyhow::Result<()> {
-        let ids = self.tokenize("warm up the encoder and the head", true)?;
+        let ids = self.tokenize("warm up the encoder and the decision tower", true)?;
         let state = self.encode(&ids)?;
-        let cands = [self.tokenize("yes", false)?, self.tokenize("no", false)?];
+        let criteria = [("yes".to_string(), None), ("no".to_string(), None)];
+        let mut cands = Vec::new();
+        for kind in ["choice", "score", "noul"] {
+            for ids in self.candidate_ids("Warm up?", &criteria)? {
+                cands.push(Candidate { kind, ids });
+            }
+        }
         self.energies(&state, &cands)?;
         Ok(())
     }
@@ -87,17 +142,17 @@ impl CandleBackend {
     pub fn forward_timed(&self, ids: &[u32]) -> anyhow::Result<(f64, Tensor)> {
         let x = Tensor::new(ids, &self.device)?.unsqueeze(0)?;
         let t = Instant::now();
-        let h = self.model.forward(&x)?;
+        let h = self.model.encoder().forward(&x)?;
         self.device.synchronize()?;
         Ok((t.elapsed().as_secs_f64() * 1e3, h))
     }
 }
 
 impl Backend for CandleBackend {
-    type State = Tensor;
+    type State = LateState;
 
     fn model_id(&self) -> &str {
-        MODEL_ID
+        &self.manifest.model_id
     }
 
     fn backend_name(&self) -> &str {
@@ -112,52 +167,81 @@ impl Backend for CandleBackend {
         Ok(self.tokenizer.encode(text, special_tokens).map_err(anyhow::Error::msg)?.get_ids().to_vec())
     }
 
-    fn encode(&mut self, state_ids: &[u32]) -> anyhow::Result<Tensor> {
-        let h = self.model.forward(&Tensor::new(state_ids, &self.device)?.unsqueeze(0)?)?;
+    fn encode(&mut self, state_ids: &[u32]) -> anyhow::Result<LateState> {
+        let s = self.model.encode_state(state_ids, &self.device)?;
         self.device.synchronize()?;
-        Ok(h)
+        Ok(s)
     }
 
-    fn state_bytes(state: &Tensor) -> usize {
-        state.elem_count() * state.dtype().size_in_bytes()
+    fn state_bytes(state: &LateState) -> usize {
+        state.bytes()
     }
 
-    /// Slice head, not the Krite decision tower: energy_i = 10 · cos(mean_t H_state[t], mean_j E[c_i, j]).
-    /// One shared function per candidate, so it is order-invariant and question-isolated; its quality is
-    /// meaningless.
-    fn energies(&mut self, state: &Tensor, candidates: &[Vec<u32>]) -> anyhow::Result<Vec<f32>> {
-        let n = candidates.len();
-        if n == 0 {
+    /// Same layout as `candidate_ids` in training/krite_train/model.py: instructions and option are
+    /// tokenized separately; the instructions once per question.
+    fn candidate_ids(
+        &self,
+        instructions: &str,
+        criteria: &[(String, Option<String>)],
+    ) -> anyhow::Result<Vec<Vec<u32>>> {
+        let m = &self.manifest;
+        let mut ins = self.tokenize(instructions, false)?;
+        ins.truncate(m.max_candidate_tokens);
+        let (bos, eos) = (self.config.bos_token_id, self.config.eos_token_id);
+        criteria
+            .iter()
+            .map(|(name, desc)| {
+                let opt = match desc {
+                    Some(d) => format!("\n{name}: {d}"),
+                    None => format!("\n{name}"),
+                };
+                let opt = self.tokenize(&opt, false)?;
+                Ok(frame(bos, ins.clone(), opt, eos, m.max_candidate_tokens, m.max_option_tokens))
+            })
+            .collect()
+    }
+
+    fn energies(&mut self, state: &LateState, candidates: &[Candidate]) -> anyhow::Result<Vec<f32>> {
+        if candidates.is_empty() {
             return Ok(vec![]);
         }
-        if candidates.iter().any(Vec::is_empty) {
-            bail!("a candidate text has no tokens");
+        if candidates.iter().any(|c| c.ids.is_empty()) {
+            bail!("a candidate has no tokens");
         }
-        // Segment mean pooling: memory is O((T + n)·d); the runtime bounds T (`max_candidate_tokens`).
-        let ids: Vec<u32> = candidates.concat();
-        let segment: Vec<u32> =
-            candidates.iter().enumerate().flat_map(|(i, c)| std::iter::repeat_n(i as u32, c.len())).collect();
-        let lens: Vec<f32> = candidates.iter().map(|c| c.len() as f32).collect();
-        let d = self.model.embeddings().dim(1)?;
-        let emb = self.model.embeddings().index_select(&Tensor::new(ids, &self.device)?, 0)?; // (T, d)
-        let segment = Tensor::new(segment, &self.device)?;
-        let sums = Tensor::zeros((n, d), DType::F32, &self.device)?.index_add(&segment, &emb, 0)?; // (n, d)
-        let c = sums.broadcast_div(&Tensor::from_vec(lens, (n, 1), &self.device)?)?;
-        let h = state.mean(1)?.squeeze(0)?; // (d)
-        let dot = c.matmul(&h.unsqueeze(1)?)?.squeeze(1)?;
-        let norms = (c.sqr()?.sum(1)?.sqrt()? * h.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()? as f64)?;
-        Ok(((dot / norms)? * 10.0)?.to_vec1::<f32>()?)
+        let keys: Vec<[u8; 32]> = candidates.iter().map(|c| ids_key(&c.ids)).collect();
+        let mut lowers: Vec<Option<Tensor>> = keys.iter().map(|k| self.candidates.get(k)).collect();
+        // Distinct misses run the lower layers together, in bounded batches.
+        let mut miss: Vec<usize> = Vec::new();
+        for (i, l) in lowers.iter().enumerate() {
+            if l.is_none() && !miss.iter().any(|&j| keys[j] == keys[i]) {
+                miss.push(i);
+            }
+        }
+        if !miss.is_empty() {
+            let ids: Vec<&[u32]> = miss.iter().map(|&i| candidates[i].ids.as_slice()).collect();
+            let fresh = self.model.lower(&ids, &self.device)?;
+            for (&i, x) in miss.iter().zip(fresh) {
+                for (j, l) in lowers.iter_mut().enumerate() {
+                    if l.is_none() && keys[j] == keys[i] {
+                        *l = Some(x.clone());
+                    }
+                }
+                let bytes = x.elem_count() * x.dtype().size_in_bytes();
+                self.candidates.insert(keys[i], x, bytes);
+            }
+        }
+        let lowers: Vec<Tensor> = lowers.into_iter().map(|l| l.expect("every miss was filled")).collect();
+        let kinds: Vec<u32> = candidates.iter().map(|c| qtype(c.kind)).collect();
+        Ok(self.model.energies(state, &lowers, &kinds)?)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    //! These need the weights in the Hugging Face cache: `cargo test -p krite-candle --release -- --ignored`.
+    //! Ignored tests need an exported model directory:
+    //! `KRITE_MODEL=$PWD/training/ckpt/late8/candle cargo test -p krite-candle --release -- --ignored`.
     use super::*;
-
-    fn backend() -> CandleBackend {
-        CandleBackend::load(device(false).unwrap()).unwrap()
-    }
+    use serde_json::Value;
 
     #[test]
     fn bench_ids_frame_with_bos_eos() {
@@ -166,40 +250,110 @@ mod tests {
     }
 
     #[test]
+    fn frame_keeps_the_option_first() {
+        let f = frame(2, (100..140).collect(), (200..220).collect(), 1, 32, 14);
+        assert_eq!(f.len(), 32);
+        assert_eq!((f[0], f[31]), (2, 1));
+        assert_eq!(&f[17..31], &(200..214).collect::<Vec<u32>>()[..]);
+        assert_eq!(&f[1..17], &(100..116).collect::<Vec<u32>>()[..]);
+        assert_eq!(frame(2, vec![7, 8], vec![9], 1, 32, 14), vec![2, 7, 8, 9, 1]);
+    }
+
+    fn model_dir() -> Option<PathBuf> {
+        let dir = std::env::var_os("KRITE_MODEL").map(PathBuf::from);
+        if dir.is_none() {
+            eprintln!("KRITE_MODEL not set; skipping");
+        }
+        dir
+    }
+
+    fn probe(dir: &Path) -> Value {
+        serde_json::from_slice(&std::fs::read(dir.join("probe.json")).unwrap()).unwrap()
+    }
+
+    fn probe_candidates(b: &CandleBackend, p: &Value) -> Vec<Candidate> {
+        p["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                let kind = match c["kind"].as_str().unwrap() {
+                    "choice" => "choice",
+                    "score" => "score",
+                    _ => "noul",
+                };
+                let criterion = (c["name"].as_str().unwrap().to_string(), c["desc"].as_str().map(str::to_string));
+                let ids = b.candidate_ids(c["instructions"].as_str().unwrap(), &[criterion]).unwrap().remove(0);
+                let want: Vec<u32> = serde_json::from_value(c["ids"].clone()).unwrap();
+                assert_eq!(ids, want, "candidate ids of {c}");
+                Candidate { kind, ids }
+            })
+            .collect()
+    }
+
+    fn max_dev(a: &[f32], b: &[f32]) -> f32 {
+        assert_eq!(a.len(), b.len());
+        a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0, f32::max)
+    }
+
+    #[test]
     #[ignore]
-    fn encoder_matches_torch_reference() {
-        // hidden[0, 0, 0..4] of bench_ids(64) from `encoder_torch.py --probe` (torch MPS, fp32).
-        let want = std::env::var("KRITE_TORCH_PROBE").ok();
-        let b = backend();
-        let (_, h) = b.forward_timed(&bench_ids(64)).unwrap();
-        assert_eq!(h.dims(), &[1, 64, 384]);
-        let got: Vec<f32> = h.get(0).unwrap().get(0).unwrap().narrow(0, 0, 4).unwrap().to_vec1().unwrap();
-        assert!(got.iter().all(|x| x.is_finite()));
-        if let Some(w) = want {
-            let w: Vec<f32> = serde_json::from_str(&w).unwrap();
-            let diff = got.iter().zip(&w).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
-            assert!(diff <= 1e-4, "max |Δ| {diff}: {got:?} vs {w:?}");
+    fn lower_rows_do_not_pin_the_batch() {
+        // The candidate cache charges each row its own bytes, so a row must not keep the batch alive.
+        let Some(dir) = model_dir() else { return };
+        let b = CandleBackend::load(&dir, Device::Cpu, 0).unwrap();
+        let cands: [&[u32]; 3] = [&[2, 10, 11, 12, 1], &[2, 20, 1], &[2, 30, 31, 1]];
+        for (x, c) in b.model.lower(&cands, &Device::Cpu).unwrap().iter().zip(cands) {
+            let (storage, _) = x.storage_and_layout();
+            let candle_core::Storage::Cpu(s) = &*storage else { unreachable!("CPU device") };
+            assert_eq!(s.as_slice::<f32>().unwrap().len(), c.len() * x.dim(1).unwrap(), "row {c:?} pins the batch");
         }
     }
 
     #[test]
     #[ignore]
-    fn head_is_order_invariant_and_isolated() {
-        let mut b = backend();
-        let state = b.encode(&b.tokenize("The invoice was charged twice.", true).unwrap()).unwrap();
-        let c: Vec<Vec<u32>> =
-            ["billing", "technical", "account", "other"].iter().map(|t| b.tokenize(t, false).unwrap()).collect();
-        let fwd = b.energies(&state, &c).unwrap();
-        let mut rev_c = c.clone();
+    fn matches_torch_probe() {
+        let Some(dir) = model_dir() else { return };
+        let p = probe(&dir);
+        let mut b = CandleBackend::load(&dir, device(false).unwrap(), 1 << 26).unwrap();
+        let ids = b.tokenize(p["state_text"].as_str().unwrap(), true).unwrap();
+        assert_eq!(ids, serde_json::from_value::<Vec<u32>>(p["state_ids"].clone()).unwrap());
+        let cands = probe_candidates(&b, &p);
+        let state = b.encode(&ids).unwrap();
+        let got = b.energies(&state, &cands).unwrap();
+        let want: Vec<f32> = serde_json::from_value(p["energies"].clone()).unwrap();
+        let dev = max_dev(&got, &want);
+        eprintln!("max |Δ energy| vs torch: {dev:.2e}");
+        assert!(dev <= 1e-4, "max |Δ energy| {dev}: {got:?} vs {want:?}");
+    }
+
+    #[test]
+    #[ignore]
+    fn order_invariant_isolated_and_cache_free() {
+        let Some(dir) = model_dir() else { return };
+        let p = probe(&dir);
+        let mut b = CandleBackend::load(&dir, device(false).unwrap(), 1 << 26).unwrap();
+        let state = b.encode(&b.tokenize(p["state_text"].as_str().unwrap(), true).unwrap()).unwrap();
+        let cands = probe_candidates(&b, &p);
+        let fwd = b.energies(&state, &cands).unwrap();
+        let warm = b.energies(&state, &cands).unwrap();
+        let mut rev_c = cands.clone();
         rev_c.reverse();
         let mut rev = b.energies(&state, &rev_c).unwrap();
         rev.reverse();
-        let mut crowd = c.clone();
-        crowd.extend((0..15).map(|i| b.tokenize(&format!("filler {i}"), false).unwrap()));
-        let crowded = b.energies(&state, &crowd).unwrap();
-        for i in 0..4 {
-            assert!((fwd[i] - rev[i]).abs() <= 1e-5);
-            assert!((fwd[i] - crowded[i]).abs() <= 1e-5);
+        let mut crowd = cands.clone();
+        let fillers: Vec<(String, Option<String>)> = (0..15).map(|i| (format!("filler {i}"), None)).collect();
+        for ids in b.candidate_ids("Pick one.", &fillers).unwrap() {
+            crowd.push(Candidate { kind: "choice", ids });
+        }
+        let crowded = b.energies(&state, &crowd).unwrap()[..cands.len()].to_vec();
+        let mut cold = CandleBackend::load(&dir, device(false).unwrap(), 0).unwrap();
+        // Its own state: tensors of another Metal device instance do not mix.
+        let cold_state = cold.encode(&cold.tokenize(p["state_text"].as_str().unwrap(), true).unwrap()).unwrap();
+        let uncached = cold.energies(&cold_state, &cands).unwrap();
+        for (name, e) in [("warm", &warm), ("reversed", &rev), ("crowded", &crowded), ("uncached", &uncached)] {
+            let dev = max_dev(&fwd, e);
+            assert!(dev <= 1e-5, "{name}: max |Δ| {dev}");
         }
     }
 }

@@ -27,7 +27,7 @@ Question q + Criterion c_i ──► Decision Tower ◄──────┘
 In this document and everywhere under `docs/`, these terms have only the meanings defined here.
 
 - **State**: The input being judged. A string or a JSON object. An object is treated as its RFC 8785 (JCS) canonical string. The state is encoded independently of questions.
-- **State Memory** (`H_state`): The per-token hidden states of `Encoder(state)`. It never sees questions. It is cached across requests under the key `(model_id, tokenizer_version, sha256(canonical_state_bytes))`.
+- **State Memory** (`H_state`): What the decision tower reads from the state: its rotated keys and values in each top encoder layer (§1). It never sees questions. It is cached across requests under the key `(model_id, tokenizer_version, sha256(canonical_state_bytes))`.
 - **Question**: `{type, instructions, criteria}`, identified by an id within a request. Questions never attend to each other (isolation).
 - **Criterion**: One candidate of a question: a Choice option, a Score level, or Noul's true/false. It has a name and an optional description.
 - **Decision**: Krite's output for one Question: a calibrated probability distribution over the candidate set, plus the values derived from it (`choice`, `score`, `noul`).
