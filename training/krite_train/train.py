@@ -1,9 +1,11 @@
-"""Trains one architecture-study arm from mmBERT-small on the study mixture (krite_train.data).
+"""Trains one arm from mmBERT-small (krite_train.model.ARMS) on a training mixture (krite_train.data).
 
     uv run python -m krite_train.train --arm d2            # full run → training/ckpt/d2/
     uv run python -m krite_train.train --arm b --scale 0.02 # pilot
 
-Every arm uses the same examples, batch order, and hyperparameters, so arms differ only in model.
+Arms use the study mixture and cross-entropy unless their spec says otherwise (`mixture`, `brier`,
+`ordinal`, `epochs`; docs/training-data.md). Arms with the same data spec and seed see the same
+examples in the same order.
 """
 
 from __future__ import annotations
@@ -24,6 +26,23 @@ CKPT_DIR = Path(__file__).resolve().parents[1] / "ckpt"
 JOINT_LEN = 384  # B rows: JOINT_HEAD + MAX_STATE_TRAIN + <eos>, rounded up
 STATE_LEN = m.MAX_STATE_TRAIN + 2
 LR_ENCODER, LR_NEW = 5e-5, 3e-4
+BRIER_W, ORD_W = 1.0, 1.0  # fixed before the loss runs (docs/training-data.md)
+
+
+def losses(e: torch.Tensor, gold: torch.Tensor, qtype: torch.Tensor, spec: dict) -> torch.Tensor:
+    """CE, plus Brier (spec "brier") and, on score rows only, squared CDF distance (spec "ordinal")."""
+    loss = F.cross_entropy(e, gold)
+    if not (spec.get("brier") or spec.get("ordinal")):
+        return loss
+    p, y = e.softmax(-1), F.one_hot(gold, e.size(-1)).to(e.dtype)
+    if spec.get("brier"):
+        loss = loss + BRIER_W * (p - y).pow(2).sum(-1).mean()
+    score = qtype == m.QTYPES["score"]
+    # Batches share K, not type: the ordinal term must skip choice and noul rows.
+    if spec.get("ordinal") and score.any():
+        d = (p[score].cumsum(-1) - y[score].cumsum(-1)).pow(2).sum(-1) / (e.size(-1) - 1)
+        loss = loss + ORD_W * d.mean()
+    return loss
 
 
 def tokenize(tok, ex: dict) -> dict:
@@ -74,7 +93,7 @@ def main() -> None:
     spec = m.ARMS[a.arm]
     seed = spec.get("seed", a.seed)
     torch.manual_seed(seed)
-    examples, sources = data.build(seed, a.scale)
+    examples, sources = data.build(seed, a.scale, mixture=spec.get("mixture", "study"))
     tok = m.tokenizer()
     t0 = time.time()
     toks = [tokenize(tok, ex) for ex in examples]
@@ -104,7 +123,8 @@ def main() -> None:
     peak, t0, window = 0, time.time(), []
     for step, batch in enumerate(batches):
         gold = torch.tensor([t["gold"] for t in batch], device=device)
-        loss = F.cross_entropy(energies(net, batch, device), gold)
+        qtype = torch.tensor([t["qtype"] for t in batch], device=device)
+        loss = losses(energies(net, batch, device), gold, qtype, spec)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
         opt.step()
@@ -129,7 +149,9 @@ def main() -> None:
         "examples": len(examples),
         "trained_examples": steps * a.batch,
         "train_sha256": sources.pop("train_sha256"),
+        "mixture": sources.pop("mixture"),
         "sources": sources,
+        "loss": {"brier": BRIER_W if spec.get("brier") else 0, "ordinal": ORD_W if spec.get("ordinal") else 0},
         "seed": seed,
         "scale": a.scale,
         "steps": steps,

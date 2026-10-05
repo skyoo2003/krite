@@ -775,6 +775,7 @@ per-candidate repeats 12.2–12.8 ms, so the second round's 15% `arch-b-s14` gap
   with per-bucket temperatures; it matches `arch-late8` within 6.6e-6 per probability and on every
   suite's accuracy. Numbers, including where Candle is still slower than torch, are in
   [runtime.md](runtime.md#measured).
+- The release recipe and its training data: [training-data.md](training-data.md).
 
 ## Caveats
 

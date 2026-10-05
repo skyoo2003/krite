@@ -271,3 +271,23 @@ model = "arch-late8-s14"
 backend = "torch-mps"
 precision = "fp32"
 start = "python shims/arch_shim.py --ckpt ../../training/ckpt/late8-s14 --port 8136"
+
+# Release recipe (docs/training-data.md). Ports 8141–8146 for the loss and epoch stages,
+# 8147–8149 for krite-v1, krite-v1-raw, krite-v1-nocache.
+[arch-late8-broad]
+port = 8139
+venv = true
+venv_from = "arch-b"
+model = "arch-late8-broad"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/late8-broad --port 8139"
+
+[arch-late8-broad-s14]
+port = 8140
+venv = true
+venv_from = "arch-b"
+model = "arch-late8-broad-s14"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/late8-broad-s14 --port 8140"

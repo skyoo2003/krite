@@ -42,6 +42,9 @@ ARMS = {
     # Third round: between late4 and late8, and a second seed for late8.
     "late6": {"kind": "late", "late_layers": 6},
     "late8-s14": {"kind": "late", "late_layers": 8, "seed": 14},
+    # Release recipe (docs/training-data.md), stage A: the broad mixture.
+    "late8-broad": {"kind": "late", "late_layers": 8, "mixture": "broad"},
+    "late8-broad-s14": {"kind": "late", "late_layers": 8, "mixture": "broad", "seed": 14},
 }
 MODEL_KEYS = ("layers", "option_encoder", "state_pool", "set_attention", "small_init")
 
