@@ -78,14 +78,33 @@ start = "cbjev-serve"
 dialect = "jev"  # routes English vs. multilingual weights itself (response `routing` field)
 env = { CBJEV_DEVICE = "mps", CBJEV_PRELOAD = "1" }
 
-# Krite itself. Build first with `cargo build --release -p krite-cli` at the repo root.
+# Krite itself. Build first with `cargo build --release -p krite-cli` at the repo root, and export the
+# model directory with `cd training && uv run python -m krite_train.export --ckpt ckpt/late8`.
 [krite]
 port = 8110
 venv = false
 model = "krite-0.15b-v0"
 backend = "candle-metal"
 precision = "fp32"
-start = "../../target/release/krite serve --port 8110"
+start = "../../target/release/krite serve --port 8110 --model ../../training/ckpt/late8/candle"
+
+# Uncalibrated probabilities: the only engine to fit temperatures on (`krite_train.export --engine krite-raw`).
+[krite-raw]
+port = 8138
+venv = false
+model = "krite-0.15b-v0"
+backend = "candle-metal"
+precision = "fp32"
+start = "../../target/release/krite serve --port 8138 --model ../../training/ckpt/late8/candle --raw"
+
+# Both caches off (state memory and candidate lower layers): cache hit vs. miss (ARCHITECTURE.md I3).
+[krite-nocache]
+port = 8137
+venv = false
+model = "krite-0.15b-v0"
+backend = "candle-metal"
+precision = "fp32"
+start = "../../target/release/krite serve --port 8137 --model ../../training/ckpt/late8/candle --state-cache-mb 0 --candidate-cache-mb 0"
 
 [classifier]
 port = 8105

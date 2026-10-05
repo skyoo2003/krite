@@ -2,7 +2,7 @@
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
-use krite_runtime::{Backend, Runtime};
+use krite_runtime::{Backend, Candidate, Runtime};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
@@ -29,8 +29,18 @@ impl Backend for HashBackend {
     fn state_bytes(s: &Vec<u32>) -> usize {
         s.len() * 4
     }
-    fn energies(&mut self, s: &Vec<u32>, cands: &[Vec<u32>]) -> anyhow::Result<Vec<f32>> {
-        Ok(cands.iter().map(|c| Sha256::digest(format!("{s:?}|{c:?}"))[0] as f32 / 64.0).collect())
+    fn candidate_ids(
+        &self,
+        instructions: &str,
+        criteria: &[(String, Option<String>)],
+    ) -> anyhow::Result<Vec<Vec<u32>>> {
+        criteria
+            .iter()
+            .map(|(n, d)| self.tokenize(&format!("{instructions}\n{n}: {}", d.as_deref().unwrap_or("")), false))
+            .collect()
+    }
+    fn energies(&mut self, s: &Vec<u32>, cands: &[Candidate]) -> anyhow::Result<Vec<f32>> {
+        Ok(cands.iter().map(|c| Sha256::digest(format!("{s:?}|{}|{:?}", c.kind, c.ids))[0] as f32 / 64.0).collect())
     }
 }
 

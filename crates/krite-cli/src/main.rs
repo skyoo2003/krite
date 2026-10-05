@@ -1,10 +1,11 @@
 //! `krite serve` and `krite bench-encoder`.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use krite_candle::{CandleBackend, bench_ids, device};
-use krite_runtime::{Backend, Runtime};
+use krite_runtime::{Backend, Calibrator, Runtime};
 use serde_json::json;
 
 /// 15 minutes: above this, model-layer cells drop to 50 measured runs (benchmark-spec §12 `truncated`).
@@ -28,16 +29,28 @@ enum Dev {
 enum Cmd {
     /// Serve Protocol v1 (POST /v1/systemone) on 127.0.0.1
     Serve {
+        /// Model directory from `python -m krite_train.export`
+        #[arg(long)]
+        model: PathBuf,
         #[arg(long, default_value_t = 8110)]
         port: u16,
         #[arg(long, value_enum, default_value_t = Dev::Auto)]
         device: Dev,
-        /// State cache budget (MiB of encoder hidden states)
+        /// State cache budget (MiB of state keys and values); 0 disables
         #[arg(long, default_value_t = 1024)]
         state_cache_mb: usize,
+        /// Candidate lower-layer cache budget (MiB); 0 disables
+        #[arg(long, default_value_t = 64)]
+        candidate_cache_mb: usize,
+        /// Serve uncalibrated probabilities (every temperature 1.0), for fitting temperatures
+        #[arg(long)]
+        raw: bool,
     },
     /// Model-layer encoder timings (benchmark-spec §2) as one JSON object on stdout
     BenchEncoder {
+        /// Model directory from `python -m krite_train.export`
+        #[arg(long)]
+        model: PathBuf,
         #[arg(long, value_delimiter = ',', default_value = "64,512,2048")]
         tokens: Vec<usize>,
         #[arg(long, default_value_t = 20)]
@@ -49,8 +62,8 @@ enum Cmd {
     },
 }
 
-fn load(dev: Dev) -> anyhow::Result<CandleBackend> {
-    CandleBackend::load(device(matches!(dev, Dev::Cpu))?)
+fn load(model: &Path, dev: Dev, candidate_cache_mb: usize) -> anyhow::Result<CandleBackend> {
+    CandleBackend::load(model, device(matches!(dev, Dev::Cpu))?, candidate_cache_mb << 20)
 }
 
 fn median(xs: &[f64]) -> f64 {
@@ -59,8 +72,8 @@ fn median(xs: &[f64]) -> f64 {
     v.get(v.len() / 2).copied().unwrap_or(0.0)
 }
 
-fn bench_encoder(tokens: &[usize], warmup: usize, n: usize, dev: Dev) -> anyhow::Result<()> {
-    let b = load(dev)?;
+fn bench_encoder(model: &Path, tokens: &[usize], warmup: usize, n: usize, dev: Dev) -> anyhow::Result<()> {
+    let b = load(model, dev, 0)?;
     let mut results = BTreeMap::new();
     for &s in tokens {
         anyhow::ensure!(s >= 2, "--tokens values must be at least 2 (<bos> and <eos>)");
@@ -86,12 +99,17 @@ fn bench_encoder(tokens: &[usize], warmup: usize, n: usize, dev: Dev) -> anyhow:
 
 fn main() -> anyhow::Result<()> {
     match Cli::parse().cmd {
-        Cmd::Serve { port, device, state_cache_mb } => {
-            let mut backend = load(device)?;
+        Cmd::Serve { model, port, device, state_cache_mb, candidate_cache_mb, raw } => {
+            let mut backend = load(&model, device, candidate_cache_mb)?;
             backend.warmup()?;
-            let rt = Runtime::new(backend, state_cache_mb * 1024 * 1024);
+            let calibrator = if raw {
+                Calibrator::identity()
+            } else {
+                Calibrator::from_temperatures(backend.temperatures().iter().map(|(k, v)| (k.as_str(), *v)))?
+            };
+            let rt = Runtime::new(backend, state_cache_mb << 20).with_calibrator(calibrator);
             tokio::runtime::Runtime::new()?.block_on(krite_server::serve(rt, port))
         }
-        Cmd::BenchEncoder { tokens, warmup, n, device } => bench_encoder(&tokens, warmup, n, device),
+        Cmd::BenchEncoder { model, tokens, warmup, n, device } => bench_encoder(&model, &tokens, warmup, n, device),
     }
 }
