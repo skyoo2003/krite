@@ -45,6 +45,9 @@ ARMS = {
     # Release recipe (docs/training-data.md), stage A: the broad mixture.
     "late8-broad": {"kind": "late", "late_layers": 8, "mixture": "broad"},
     "late8-broad-s14": {"kind": "late", "late_layers": 8, "mixture": "broad", "seed": 14},
+    # Stage B1: the Brier term on the stage A winner.
+    "late8-brier": {"kind": "late", "late_layers": 8, "mixture": "broad", "brier": True},
+    "late8-brier-s14": {"kind": "late", "late_layers": 8, "mixture": "broad", "brier": True, "seed": 14},
 }
 MODEL_KEYS = ("layers", "option_encoder", "state_pool", "set_attention", "small_init")
 
