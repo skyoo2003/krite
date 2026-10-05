@@ -19,6 +19,7 @@ benchmarks/baselines/serve.sh <engine>     # start on its port; waits for the fi
 | `cbjev` | `0010101010-1/cbjev` | its own server (`cbjev-serve`), black box | 8000 | `CBJEV_DEVICE=mps` | **GPL-3.0** |
 | `classifier` | `jhu-clsp/mmBERT-small` + per-dataset head | `shims/classifier_shim.py`; trained by `classifier_train.py` | 8105 | torch MPS | MIT (base) |
 | `krite` | `krite-0.15b-v0` (mmBERT-small encoder, temporary head) | `target/release/krite serve`; build with `cargo build --release -p krite-cli` | 8110 | Candle Metal | Apache-2.0 |
+| `arch-*` | architecture-study arms: `arch-b`, `arch-d1`, `arch-d2`, `arch-d4`, `arch-d2-emb`, `arch-d2-nocache`, `arch-d1-pool`, `arch-d1-lr`, `arch-d1-set`, `arch-late4`, `arch-late4-nocache`, `arch-late8`, `arch-late4-s14`, `arch-b-s14`, `arch-late8-nocache`, `arch-late6`, `arch-late8-s14` ([docs/architecture-study.md](../../docs/architecture-study.md)) | `shims/arch_shim.py`; trained by `training/` | 8120–8136 | torch MPS | Apache-2.0 |
 | `fake`, `fake-biased` | none | `shims/fake_shim.py` (tests) | 8199, 8198 | — | — |
 
 Exact versions are in `engines.toml` (git commits, Hugging Face revisions) and in each

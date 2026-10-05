@@ -13,3 +13,6 @@ __pycache__/
 
 # Rust build output
 /target/
+
+# Training: checkpoints stay local.
+training/ckpt/

@@ -20,6 +20,8 @@ Question q + Criterion c_i ──► Decision Tower ◄──────┘
                         Choice / Score / Noul answer
 ```
 
+**Decision tower.** The [architecture study](docs/architecture-study.md) accepted late interaction inside the encoder (`late8`) over the joint Laya-style encoder. Each candidate is the text `"{instructions}\n{name}[: {desc}]"`, tokenized with bos/eos and cut to 32 tokens. It runs the lower encoder layers (0–13 of mmBERT-small's 22) alone. In the top 8 layers its tokens attend to their own tokens and to the state's keys and values at that layer, with the pretrained attention weights and RoPE positions continuing after the state. A masked mean over the candidate's tokens plus a question-type embedding goes to an MLP scorer that gives `e_i`. State Memory is therefore the state's rotated keys and values in the top 8 layers. The state is still encoded once and never sees questions. A candidate's lower-layer states depend only on its text, so they can be cached as well. Candidates never attend to each other, so isolation and option-order invariance hold by construction.
+
 ## 2. Glossary
 
 In this document and everywhere under `docs/`, these terms have only the meanings defined here.

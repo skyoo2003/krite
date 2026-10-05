@@ -1,3 +1,4 @@
+import json
 import math
 
 import numpy as np
@@ -114,3 +115,14 @@ def test_encoder_rows_are_model_layer_and_parity_checked():
         runners.encoder_rows(
             {"krite": _encoder_out("candle-metal", 1e-3), "classifier": _encoder_out("torch-mps", 0.0)}, "e"
         )
+
+
+def test_report_renders_selected_engines(tmp_path):
+    from krite_bench import report
+
+    row = {"engine": "arch-d2", "suite": "agnews-choice", "error_rate": 0.0, "accuracy": 0.9, "macro_f1": 0.8}
+    (tmp_path / "quality.jsonl").write_text(json.dumps(row) + "\n")
+    text = report.render(tmp_path, ("arch-d2",))
+    assert "| Suite | Metric | arch-d2 |" in text
+    assert "0.900 / 0.800" in text
+    assert "Laya" not in text.split("### Calibration")[0]

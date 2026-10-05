@@ -12,7 +12,7 @@ from pathlib import Path
 from .data import suites
 
 START, END = "<!-- GENERATED:START -->", "<!-- GENERATED:END -->"
-ENGINES = ["laya", "kev", "semif", "cbjev", "classifier"]
+ENGINES = ("laya", "kev", "semif", "cbjev", "classifier")
 TITLES = {
     "laya": "Laya",
     "kev": "Kev-0.8B",
@@ -40,9 +40,9 @@ def _latest(rows: list[dict], *keys: str, alias: bool = True) -> dict[tuple, dic
     return out
 
 
-def _known(rows: dict[tuple, dict]) -> list[tuple[tuple, dict]]:
+def _known(rows: dict[tuple, dict], engines: tuple[str, ...]) -> list[tuple[tuple, dict]]:
     """Rows of the reported engines only (fake engines and new engines stay out of the tables)."""
-    return [(k, r) for k, r in rows.items() if k[0] in ENGINES]
+    return [(k, r) for k, r in rows.items() if k[0] in engines]
 
 
 def _f(x, digits: int = 3) -> str:
@@ -63,14 +63,14 @@ def _missing(engine: str, status: dict[str, str]) -> str:
     return f"n/a ({status[engine]})" if engine in status else "n/a (not measured)"
 
 
-def quality_section(out: Path, status: dict[str, str]) -> str:
+def quality_section(out: Path, status: dict[str, str], engines: tuple[str, ...] = ENGINES) -> str:
     q = _latest(_rows(out / "quality.jsonl"), "engine", "suite")
     main = {"choice": ("accuracy", "macro_f1"), "noul": ("accuracy", "auroc"), "score": ("mae", "qwk")}
     body = []
     for s in suites():
         a, b = main[s.type]
         cells = []
-        for e in ENGINES:
+        for e in engines:
             r = q.get((e, s.id))
             if not r:
                 cells.append(_missing(e, status))
@@ -80,15 +80,15 @@ def quality_section(out: Path, status: dict[str, str]) -> str:
                 err = f" ⚠ err {r['error_rate']:.0%}" if r["error_rate"] else ""
                 cells.append(f"{_f(r[a])} / {_f(r[b])}{err}")
         body.append([s.id, f"{a} / {b}", *cells])
-    return "### Quality\n\n" + _table(["Suite", "Metric", *(TITLES[e] for e in ENGINES)], body)
+    return "### Quality\n\n" + _table(["Suite", "Metric", *(TITLES.get(e, e) for e in engines)], body)
 
 
-def calibration_section(out: Path, status: dict[str, str]) -> str:
+def calibration_section(out: Path, status: dict[str, str], engines: tuple[str, ...] = ENGINES) -> str:
     q = _latest(_rows(out / "calibration.jsonl"), "engine", "suite")
-    body, overall = [], {e: ([], []) for e in ENGINES}
+    body, overall = [], {e: ([], []) for e in engines}
     for s in suites():
         cells = []
-        for e in ENGINES:
+        for e in engines:
             r = q.get((e, s.id))
             if not r or "raw_eval_half" not in r:
                 cells.append(_missing(e, status))
@@ -105,7 +105,7 @@ def calibration_section(out: Path, status: dict[str, str]) -> str:
     nll_rows = []
     for s in suites():
         cells = []
-        for e in ENGINES:
+        for e in engines:
             r = q.get((e, s.id))
             if not r or "raw_eval_half" not in r:
                 cells.append("n/a")
@@ -120,13 +120,13 @@ def calibration_section(out: Path, status: dict[str, str]) -> str:
         "Evaluation half of each suite. One temperature per engine model and calibration bucket, fit on the "
         "pooled other halves of every suite in that bucket (benchmark-spec §9); the classifier has one model, "
         "and so one calibrator, per dataset.\n\n"
-        + _table(["Suite", *(TITLES[e] for e in ENGINES)], body)
+        + _table(["Suite", *(TITLES.get(e, e) for e in engines)], body)
         + "\n\n### Calibration: NLL and Brier, raw → scaled\n\n"
-        + _table(["Suite", *(TITLES[e] for e in ENGINES)], nll_rows)
+        + _table(["Suite", *(TITLES.get(e, e) for e in engines)], nll_rows)
     )
 
 
-def invariance_section(out: Path) -> str:
+def invariance_section(out: Path, engines: tuple[str, ...] = ENGINES) -> str:
     inv = _latest(_rows(out / "invariance.jsonl"), "engine", "suite")
     body = [
         [
@@ -137,12 +137,12 @@ def invariance_section(out: Path) -> str:
             _f(r["max_prob_dev"], 4),
             f"{r['error_rate']:.0%}",
         ]
-        for (e, s), r in sorted(_known(inv), key=lambda kv: (ENGINES.index(kv[0][0]), kv[0][1]))
+        for (e, s), r in sorted(_known(inv, engines), key=lambda kv: (engines.index(kv[0][0]), kv[0][1]))
     ]
     itf = _latest(_rows(out / "interference.jsonl"), "engine", "fillers")
     body2 = [
         [TITLES.get(e, e), str(f), _f(r["argmax_change_rate"]), _f(r["max_prob_dev"], 4)]
-        for (e, f), r in sorted(_known(itf), key=lambda kv: (ENGINES.index(kv[0][0]), kv[0][1]))
+        for (e, f), r in sorted(_known(itf, engines), key=lambda kv: (engines.index(kv[0][0]), kv[0][1]))
     ]
     return (
         "### Option-order invariance (100 cases per suite)\n\n"
@@ -221,20 +221,20 @@ def memory_section(out: Path) -> str:
     )
 
 
-def render(out: Path) -> str:
+def render(out: Path, engines: tuple[str, ...] = ENGINES) -> str:
     status = _status(out)
     parts = [
-        quality_section(out, status),
-        calibration_section(out, status),
-        invariance_section(out),
+        quality_section(out, status, engines),
+        calibration_section(out, status, engines),
+        invariance_section(out, engines),
         latency_section(out),
         memory_section(out),
     ]
     return "\n\n".join(parts)
 
 
-def write(out: Path, dest: Path) -> None:
-    block = f"{START}\n\n{render(out)}\n\n{END}"
+def write(out: Path, dest: Path, engines: tuple[str, ...] = ENGINES) -> None:
+    block = f"{START}\n\n{render(out, engines)}\n\n{END}"
     text = dest.read_text() if dest.exists() else f"# Baselines\n\n{START}\n{END}\n"
     if START not in text:
         raise SystemExit(f"{dest} lacks the {START} marker")
