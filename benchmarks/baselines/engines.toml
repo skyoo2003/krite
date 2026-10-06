@@ -309,3 +309,21 @@ model = "arch-late8-brier-s14"
 backend = "torch-mps"
 precision = "fp32"
 start = "python shims/arch_shim.py --ckpt ../../training/ckpt/late8-brier-s14 --port 8142"
+
+[arch-late8-ord]
+port = 8143
+venv = true
+venv_from = "arch-b"
+model = "arch-late8-ord"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/late8-ord --port 8143"
+
+[arch-late8-ord-s14]
+port = 8144
+venv = true
+venv_from = "arch-b"
+model = "arch-late8-ord-s14"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/late8-ord-s14 --port 8144"
