@@ -51,6 +51,9 @@ ARMS = {
     # Stage B2: the ordinal term on the B1 winner (B1 rejected the Brier term).
     "late8-ord": {"kind": "late", "late_layers": 8, "mixture": "broad", "ordinal": True},
     "late8-ord-s14": {"kind": "late", "late_layers": 8, "mixture": "broad", "ordinal": True, "seed": 14},
+    # Stage C: two epochs on the winner so far (B1 and B2 rejected both loss terms).
+    "late8-e2": {"kind": "late", "late_layers": 8, "mixture": "broad", "epochs": 2},
+    "late8-e2-s14": {"kind": "late", "late_layers": 8, "mixture": "broad", "epochs": 2, "seed": 14},
 }
 MODEL_KEYS = ("layers", "option_encoder", "state_pool", "set_attention", "small_init")
 
