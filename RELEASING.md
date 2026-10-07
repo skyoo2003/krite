@@ -13,11 +13,14 @@ against the package's manifest and publishes that one package with Trusted Publi
 | `krite-cli` | crates.io | `krite-cli-vX.Y.Z` | `crates/krite-cli/Cargo.toml` | runtime, candle, server |
 | `krite-bench` | PyPI | `krite-bench-vX.Y.Z` | `benchmarks/pyproject.toml` | — |
 | `krite-train` | PyPI | `krite-train-vX.Y.Z` | `training/pyproject.toml` | krite-bench |
+| `krite` | PyPI (wheels) | `krite-vX.Y.Z` | `python/pyproject.toml` | runtime, candle (built in) |
 
 Crate-to-crate requirements live in the root `Cargo.toml` (`[workspace.dependencies]`, e.g.
 `krite-core = { path = "crates/krite-core", version = "0.1.0" }`). `krite-train` requires
 `krite-bench>=0.1,<0.2` in `training/pyproject.toml`. The model (`krite-0.15b-v1` on the Hugging
-Face Hub) is not versioned with any package; it is uploaded by `scripts/publish-model.sh`.
+Face Hub) is not versioned with any package; it is uploaded by `scripts/publish-model.sh`. The `krite`
+wheels and sdist embed the crates at the tagged commit (`python/` is the `krite-py` workspace member,
+never published to crates.io), so no crate release has to come first.
 
 ## Version rules
 
@@ -97,5 +100,5 @@ release that widens its range (`krite-bench>=0.2,<0.3`) only when `krite-train` 
    workflow `release.yml`, environment `crates-io`.
 4. PyPI allows a pending publisher with a given owner, repo, workflow, and environment for one
    project at a time. Add it for `krite-bench` (environment `pypi`), push `krite-bench-v0.1.0`, then
-   add it for `krite-train` and push `krite-train-v0.1.0`.
+   add it for `krite-train` and push `krite-train-v0.1.0`, then for `krite` and push `krite-v0.1.0`.
 5. Model: `uvx --from huggingface_hub hf auth login`, then `scripts/publish-model.sh`.
