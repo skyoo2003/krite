@@ -186,6 +186,7 @@ pub struct ModernBert {
     layers: Vec<Layer>,
     final_norm: LayerNorm,
     half_window: usize,
+    heads: usize,
 }
 
 impl ModernBert {
@@ -211,7 +212,14 @@ impl ModernBert {
             });
         }
         let final_norm = layer_norm_no_bias(config.hidden_size, config.layer_norm_eps, vb.pp("final_norm"))?;
-        Ok(Self { embeddings, norm, layers, final_norm, half_window: config.local_attention / 2 })
+        Ok(Self {
+            embeddings,
+            norm,
+            layers,
+            final_norm,
+            half_window: config.local_attention / 2,
+            heads: config.num_attention_heads,
+        })
     }
 
     pub fn num_layers(&self) -> usize {
@@ -231,13 +239,21 @@ impl ModernBert {
         ids.apply(&self.embeddings)?.apply(&self.norm)
     }
 
-    /// Additive (s, s) sliding-window mask of the local layers, in the weight dtype.
+    /// Additive sliding-window mask of the local layers for one sequence of s tokens, in the weight dtype,
+    /// laid out by `mask`.
     pub fn band(&self, s: usize, dev: &Device) -> Result<Tensor> {
-        // ponytail: dense O(S²) band mask (~1.6 GB at 8192 tokens after the head broadcast); windowed kernel later
+        // ponytail: dense O(S²) band mask, expanded per head (~1.6 GB at 8192 tokens) for the whole encode; windowed kernel later
         let w = self.half_window;
         let band: Vec<f32> =
             (0..s).flat_map(|i| (0..s).map(move |j| if i.abs_diff(j) > w { f32::NEG_INFINITY } else { 0.0 })).collect();
-        Tensor::from_vec(band, (s, s), dev)?.to_dtype(self.embeddings.embeddings().dtype())
+        self.mask(&Tensor::from_vec(band, (s, s), dev)?.to_dtype(self.embeddings.embeddings().dtype())?, 1, s)
+    }
+
+    /// An additive mask broadcastable to (b, heads, s, s), in the layout attention reads. The fused Metal
+    /// kernel reads a dense mask; expanding it once per call instead of in every layer saves a strided
+    /// copy per layer (1.4 ms per local layer at 512 tokens). The CPU path broadcasts as it adds.
+    pub fn mask(&self, m: &Tensor, b: usize, s: usize) -> Result<Tensor> {
+        if m.device().is_metal() { m.broadcast_as((b, self.heads, s, s))?.contiguous() } else { Ok(m.clone()) }
     }
 
     /// Runs `layers` on xs (b, s, hidden) with `global` / `local` masks on the global / local layers.

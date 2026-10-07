@@ -162,7 +162,7 @@ impl LateModel {
             cands.iter().flat_map(|c| c.iter().copied().chain(std::iter::repeat_n(0, t - c.len()))).collect();
         let ids = Tensor::from_vec(ids, (cands.len(), t), dev)?;
         let x = self.bert.embed(&ids)?;
-        let pad = key_padding(&lens, t, x.dtype(), dev)?;
+        let pad = self.bert.mask(&key_padding(&lens, t, x.dtype(), dev)?, cands.len(), t)?;
         let x = self.bert.run(&x, 0..self.split, Some(&pad), Some(&pad))?;
         lens.iter().enumerate().map(|(i, &l)| x.get(i)?.narrow(0, 0, l)?.force_contiguous()).collect()
     }
