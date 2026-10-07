@@ -42,6 +42,18 @@ ARMS = {
     # Third round: between late4 and late8, and a second seed for late8.
     "late6": {"kind": "late", "late_layers": 6},
     "late8-s14": {"kind": "late", "late_layers": 8, "seed": 14},
+    # Release recipe (docs/training-data.md), stage A: the broad mixture.
+    "late8-broad": {"kind": "late", "late_layers": 8, "mixture": "broad"},
+    "late8-broad-s14": {"kind": "late", "late_layers": 8, "mixture": "broad", "seed": 14},
+    # Stage B1: the Brier term on the stage A winner.
+    "late8-brier": {"kind": "late", "late_layers": 8, "mixture": "broad", "brier": True},
+    "late8-brier-s14": {"kind": "late", "late_layers": 8, "mixture": "broad", "brier": True, "seed": 14},
+    # Stage B2: the ordinal term on the B1 winner (B1 rejected the Brier term).
+    "late8-ord": {"kind": "late", "late_layers": 8, "mixture": "broad", "ordinal": True},
+    "late8-ord-s14": {"kind": "late", "late_layers": 8, "mixture": "broad", "ordinal": True, "seed": 14},
+    # Stage C: two epochs on the winner so far (B1 and B2 rejected both loss terms).
+    "late8-e2": {"kind": "late", "late_layers": 8, "mixture": "broad", "epochs": 2},
+    "late8-e2-s14": {"kind": "late", "late_layers": 8, "mixture": "broad", "epochs": 2, "seed": 14},
 }
 MODEL_KEYS = ("layers", "option_encoder", "state_pool", "set_attention", "small_init")
 

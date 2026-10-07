@@ -1,0 +1,61 @@
+{
+  "engine": "krite-v1",
+  "gates": {
+    "accuracy shortfall": {
+      "value": 0.7826013668949743,
+      "limit": 0.0,
+      "pass": false
+    },
+    "ECE": {
+      "value": 0.05701272210401815,
+      "limit": 0.071,
+      "pass": true
+    },
+    "warm latency (ms)": {
+      "value": 7.84975,
+      "limit": 10.0,
+      "pass": true
+    },
+    "cold latency (ms)": {
+      "value": 90.14568750000001,
+      "limit": 210.0,
+      "pass": true
+    },
+    "decisions/sec (30 questions)": {
+      "value": 211.65881372487746,
+      "limit": 175.0,
+      "pass": true
+    },
+    "I1 flip rate": {
+      "value": 0.0,
+      "limit": 0.0,
+      "pass": true
+    },
+    "I1 invariance max dev": {
+      "value": 0.0,
+      "limit": 1e-05,
+      "pass": true
+    },
+    "I2 interference max dev": {
+      "value": 1.7078053943242466e-07,
+      "limit": 1e-05,
+      "pass": true
+    },
+    "I3 cache on/off max dev": {
+      "value": 0.0,
+      "limit": 1e-05,
+      "pass": true
+    }
+  },
+  "shortfall": {
+    "agnews-choice": 0.2825,
+    "boolq-noul": 0.13749999999999996,
+    "sst5-score": 0.21893832196643248,
+    "xnli-noul-ar": 0.01749999999999996,
+    "xnli-noul-hi": 0.025000000000000022,
+    "amazon-score-es": 0.015315028367072561,
+    "amazon-score-ja": 0.01578125600900017,
+    "amazon-score-zh": 0.0700667605524692
+  },
+  "release": false
+}

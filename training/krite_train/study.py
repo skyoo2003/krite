@@ -1,7 +1,10 @@
-"""Architecture-study verdict from krite-bench results (pre-registered rule; docs/architecture-study.md).
+"""Pre-registered rules over krite-bench results: the architecture verdict (docs/architecture-study.md),
+and the release recipe's stage rule and release gate (docs/training-data.md).
 
 uv run python -m krite_train.study compare --a arch-d2 --b arch-d2-nocache
 uv run python -m krite_train.study verdict
+uv run python -m krite_train.study stage --base arch-late8,arch-late8-s14 --new arch-late8-broad,arch-late8-broad-s14
+uv run python -m krite_train.study release --engine krite-v1 --raw krite-v1-raw --nocache krite-v1-nocache
 """
 
 from __future__ import annotations
@@ -140,21 +143,148 @@ def verdict(out: Path) -> dict:
     }
 
 
+# --- release recipe (docs/training-data.md): rules fixed before training ---------------------------
+
+BASELINES = ROOT / "benchmarks" / "results" / "baselines"
+# Best zero-shot engines <= 0.45B (docs/baselines.md); Laya ran non-English suites on its multilingual weights.
+TARGET_ENGINES = ("laya", "laya-ml", "cbjev")
+MARGIN = 0.02
+STAGE_GAIN, IN_DOMAIN_DROP = 0.10, 0.01
+# Release gate: PRD Key Hypothesis, docs/baselines.md "Derived Krite targets".
+RELEASE = {"ece": 0.071, "warm_ms": 10.0, "cold_ms": 210.0, "dec_per_s": 175.0}
+
+
+def _value(r: dict, qtype: str) -> float:
+    return r["qwk"] if qtype == "score" else r["accuracy"]
+
+
+def targets(baselines: Path = BASELINES) -> dict[str, float]:
+    """Per-suite target: best of TARGET_ENGINES minus MARGIN (latest quality row per engine and suite)."""
+    q = _latest(_rows(baselines / "quality.jsonl"), "engine", "suite")
+    out = {}
+    for s in suites():
+        vals = [_value(q[(e, s.id)], s.type) for e in TARGET_ENGINES if (e, s.id) in q]
+        if not vals:
+            raise SystemExit(f"{s.id}: no baseline quality rows for {TARGET_ENGINES} in {baselines}")
+        out[s.id] = max(vals) - MARGIN
+    return out
+
+
+def shortfall(out: Path, engine: str, tg: dict[str, float]) -> tuple[float, dict[str, float]]:
+    """(sum, per-suite) of max(0, target - value); an unmeasured suite raises, it is not a pass."""
+    q = _latest(_rows(out / "quality.jsonl"), "engine", "suite")
+    per = {}
+    for s in suites():
+        r = q.get((engine, s.id))
+        if r is None:
+            raise RuntimeError(f"{engine} {s.id}: no quality row")
+        if r["error_rate"]:
+            raise RuntimeError(f"{engine} {s.id}: error_rate {r['error_rate']}")
+        per[s.id] = max(0.0, tg[s.id] - _value(r, s.type))
+    return sum(per.values()), per
+
+
+def _invariant_rows(out: Path, engines: list[str]) -> dict[str, dict]:
+    rows = {}
+    for e in engines:
+        inv = invariants(out, e)
+        rows[f"I1 flip rate ({e})"] = {"value": inv["flip_rate"], "pass": inv["flip_rate"] == 0}
+        for k in ("invariance_max_dev", "interference_max_dev"):
+            rows[f"{k} ({e})"] = {"value": inv[k], "pass": inv[k] <= TOL}
+    return rows
+
+
+def stage(out: Path, base: list[str], new: list[str], tg: dict[str, float]) -> dict:
+    """Stage rule on paired seeds (base[i] and new[i] share a seed); invariants on every new engine."""
+    if len(base) != len(new):
+        raise SystemExit("--base and --new need one engine per seed, in the same seed order")
+    sb = {e: shortfall(out, e, tg)[0] for e in base}
+    sn = {e: shortfall(out, e, tg)[0] for e in new}
+    gain = _mean(list(sb.values())) - _mean(list(sn.values()))
+    worse = [n for b, n in zip(base, new, strict=True) if sn[n] >= sb[b]]
+    drop = _mean([group_means(out, e)["acc_in_domain"] for e in base]) - _mean(
+        [group_means(out, e)["acc_in_domain"] for e in new]
+    )
+    rules = {
+        "shortfall gain": {"value": gain, "pass": gain >= STAGE_GAIN},
+        "seed agreement": {"value": worse, "pass": not worse},
+        "in-domain drop": {"value": drop, "pass": drop <= IN_DOMAIN_DROP},
+        **_invariant_rows(out, new),
+    }
+    return {"base": sb, "new": sn, "rules": rules, "adopt": all(r["pass"] for r in rules.values())}
+
+
+def latency_p50(out: Path, engine: str, cache_state: str, questions: int) -> float | None:
+    """http burst p50 at 512 tokens, 4 options."""
+    keys = ("engine", "layer", "cache_state", "mode", "state_tokens", "questions", "options")
+    r = _latest(_rows(out / "latency.jsonl"), *keys).get((engine, "http", cache_state, "burst", 512, questions, 4))
+    return r["p50_ms"] if r else None
+
+
+def mean_scaled_ece(out: Path, raw: str) -> float | None:
+    """Mean over suites of the temperature-scaled ECE on the half not used for the fit."""
+    rows = _latest(_rows(out / "calibration.jsonl"), "engine", "suite")
+    return _mean([r["scaled_eval_half"]["ece"] for (e, _), r in rows.items() if e == raw])
+
+
+def release(out: Path, engine: str, raw: str, nocache: str, tg: dict[str, float]) -> dict:
+    """Release gate. Missing data fails a gate, never passes it."""
+
+    def at_most(v, cap):
+        return {"value": v, "limit": cap, "pass": v is not None and v <= cap}
+
+    def at_least(v, floor):
+        return {"value": v, "limit": floor, "pass": v is not None and v >= floor}
+
+    total, per = shortfall(out, engine, tg)
+    warm30 = latency_p50(out, engine, "warm", 30)
+    inv = invariants(out, engine)
+    gates = {
+        "accuracy shortfall": at_most(total, 0.0),
+        "ECE": at_most(mean_scaled_ece(out, raw), RELEASE["ece"]),
+        "warm latency (ms)": at_most(latency_p50(out, engine, "warm", 1), RELEASE["warm_ms"]),
+        "cold latency (ms)": at_most(latency_p50(out, engine, "cold", 1), RELEASE["cold_ms"]),
+        "decisions/sec (30 questions)": at_least(30_000 / warm30 if warm30 else None, RELEASE["dec_per_s"]),
+        "I1 flip rate": at_most(inv["flip_rate"], 0.0),
+        "I1 invariance max dev": at_most(inv["invariance_max_dev"], TOL),
+        "I2 interference max dev": at_most(inv["interference_max_dev"], TOL),
+        "I3 cache on/off max dev": at_most(compare(out, engine, nocache), TOL),
+    }
+    return {
+        "engine": engine,
+        "gates": gates,
+        "shortfall": {s: v for s, v in per.items() if v > 0},
+        "release": all(g["pass"] for g in gates.values()),
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["compare", "verdict"])
+    ap.add_argument("cmd", choices=["compare", "verdict", "stage", "release"])
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--a", default="arch-d2")
     ap.add_argument("--b", default="arch-d2-nocache")
     ap.add_argument("--tol", type=float, default=TOL, help="compare: max |Δp| allowed")
+    ap.add_argument("--baselines", type=Path, default=BASELINES, help="stage/release: baseline results directory")
+    ap.add_argument("--base", help="stage: comma-separated engines, one per seed")
+    ap.add_argument("--new", help="stage: comma-separated engines, same seed order as --base")
+    ap.add_argument("--engine", default="krite-v1", help="release: calibrated engine")
+    ap.add_argument("--raw", default="krite-v1-raw", help="release: engine the temperatures were fitted on")
+    ap.add_argument("--nocache", default="krite-v1-nocache", help="release: the engine with both caches off")
     a = ap.parse_args()
     if a.cmd == "compare":
         dev = compare(a.out, a.a, a.b)
         print(f"max |Δp| {a.a} vs {a.b}: {dev:.3g}")
         if dev > a.tol:
             raise SystemExit(f"FAIL: above {a.tol}")
-    else:
+    elif a.cmd == "verdict":
         print(json.dumps(verdict(a.out), indent=2))
+    elif a.cmd == "stage":
+        if not a.base or not a.new:
+            raise SystemExit("stage needs --base and --new")
+        print(json.dumps(stage(a.out, a.base.split(","), a.new.split(","), targets(a.baselines)), indent=2))
+    else:
+        print(json.dumps(release(a.out, a.engine, a.raw, a.nocache, targets(a.baselines)), indent=2))
 
 
 if __name__ == "__main__":
