@@ -55,11 +55,12 @@ pub struct LateModel {
     fc2: Linear,
 }
 
-/// Additive key-padding mask (n, 1, 1, t): 0 on real tokens, -inf on padding.
+/// Additive key-padding mask (1, n, 1, t), broadcastable to head-major (heads, n, t, t): 0 on real tokens,
+/// -inf on padding.
 fn key_padding(lens: &[usize], t: usize, dtype: DType, dev: &Device) -> Result<Tensor> {
     let v: Vec<f32> =
         lens.iter().flat_map(|&l| (0..t).map(move |j| if j < l { 0.0 } else { f32::NEG_INFINITY })).collect();
-    Tensor::from_vec(v, (lens.len(), 1, 1, t), dev)?.to_dtype(dtype)
+    Tensor::from_vec(v, (1, lens.len(), 1, t), dev)?.to_dtype(dtype)
 }
 
 /// Softmax over [state keys ; own keys] for every candidate, without copying the state per candidate.
@@ -130,7 +131,7 @@ impl LateModel {
         for l in self.split..self.bert.num_layers() {
             let layer = self.bert.layer(l);
             let (_, k, v) = layer.attn.qkv(&layer.attn_input(&h)?, 0)?;
-            kv.push((k.squeeze(0)?.t()?.contiguous()?, v.squeeze(0)?));
+            kv.push((k.squeeze(1)?.t()?.contiguous()?, v.squeeze(1)?));
             if l + 1 < self.bert.num_layers() {
                 h = self.bert.run(&h, l..l + 1, None, Some(&band))?;
             }
@@ -192,7 +193,7 @@ impl LateModel {
         let mut x = Tensor::stack(&rows, 0)?; // (n, t, d)
         let (dev, dtype, d) = (x.device().clone(), x.dtype(), x.dim(2)?);
         x = x.reshape((n * t, d))?;
-        let pad = key_padding(&lens, t, dtype, &dev)?.reshape((1, n, 1, t))?;
+        let pad = key_padding(&lens, t, dtype, &dev)?;
         for (i, (kt, sv)) in state.kv.iter().enumerate() {
             let layer = self.bert.layer(self.split + i);
             let a = &layer.attn;
@@ -200,7 +201,7 @@ impl LateModel {
             let split = |x: Tensor| x.reshape((a.heads, n, t, a.head_dim)); // (H, n, t, dh)
             let (q, k) = (a.rope(&split(q)?, state.len)?, a.rope(&split(k)?, state.len)?);
             let o = late_attention(&q, &k, &split(v)?, kt, sv, &pad, (a.head_dim as f64).powf(-0.5))?;
-            x = (&x + o.permute((1, 2, 0, 3))?.reshape((n * t, d))?.apply(&a.proj)?)?;
+            x = (&x + a.out(&o.reshape((a.heads, n * t, a.head_dim))?)?)?;
             x = (&x + x.apply(&layer.mlp_norm)?.apply(&layer.mlp)?)?;
         }
         let x = x.apply(self.bert.final_norm())?.reshape((n, t, d))?;
@@ -243,7 +244,7 @@ mod tests {
         let (q, k, v, sk, sv) =
             (r(&[h, n, t, dh]), r(&[h, n, t, dh]), r(&[h, n, t, dh]), r(&[h, s, dh]), r(&[h, s, dh]));
         let lens = [4, 2, 3];
-        let pad = key_padding(&lens, t, DType::F32, &dev).unwrap().reshape((1, n, 1, t)).unwrap();
+        let pad = key_padding(&lens, t, DType::F32, &dev).unwrap();
         let kt = sk.t().unwrap().contiguous().unwrap();
         let got = late_attention(&q, &k, &v, &kt, &sv, &pad, 0.3).unwrap();
         for (c, &len) in lens.iter().enumerate() {

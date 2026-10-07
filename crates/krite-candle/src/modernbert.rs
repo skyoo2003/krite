@@ -5,8 +5,10 @@
 // longer than `max_position_embeddings` so decision-tower candidates can sit after a full-length state;
 // layer-level access for the late-interaction tower. Fused projections are split at load: q/k/v into
 // per-head (heads, hidden, head_dim) weights, so one batched matmul yields head-major q/k/v, and the GeGLU
-// input into gate and up halves. Slicing or permuting fused outputs runs Candle's strided Metal kernels,
-// which are an order of magnitude slower than the contiguous ones.
+// input into gate and up halves. Attention stays head-major throughout: heads fold into sdpa's batch, and
+// the output projection is a per-head (heads, head_dim, hidden) matmul summed over heads. Slicing or
+// permuting fused outputs runs Candle's strided Metal kernels, which are an order of magnitude slower
+// than the contiguous ones.
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -65,7 +67,8 @@ pub(crate) struct Attention {
     wq: Tensor,
     wk: Tensor,
     wv: Tensor,
-    pub(crate) proj: Linear,
+    /// Output projection per head: (heads, head_dim, hidden).
+    wo: Tensor,
     pub(crate) heads: usize,
     pub(crate) head_dim: usize,
     rotary: Arc<RotaryEmbedding>,
@@ -80,7 +83,7 @@ impl Attention {
             wq: per_head(0)?,
             wk: per_head(1)?,
             wv: per_head(2)?,
-            proj: linear_no_bias(d, d, vb.pp("Wo"))?,
+            wo: heads_wo(&vb.get((d, d), "Wo.weight")?, h)?,
             heads: h,
             head_dim: d / h,
             rotary,
@@ -98,28 +101,30 @@ impl Attention {
         self.rotary.apply(x, offset)
     }
 
-    /// q and k rotated at positions offset..offset + s, and v; each (b, heads, s, head_dim).
+    /// q and k rotated at positions offset..offset + s, and v; each head-major (heads, b, s, head_dim).
+    /// RoPE treats `heads` as the batch.
     pub(crate) fn qkv(&self, xs: &Tensor, offset: usize) -> Result<(Tensor, Tensor, Tensor)> {
         let (b, s, d) = xs.dims3()?;
         let (q, k, v) = self.project(&xs.reshape((1, b * s, d))?)?;
-        // (heads, b, s, head_dim): RoPE treats `heads` as the batch; then batch-major for attention.
         let split = |x: Tensor| x.reshape((self.heads, b, s, self.head_dim));
-        let (q, k, v) = (self.rotary.apply(&split(q)?, offset)?, self.rotary.apply(&split(k)?, offset)?, split(v)?);
-        let major = |x: Tensor| {
-            if b == 1 { x.reshape((1, self.heads, s, self.head_dim)) } else { x.transpose(0, 1)?.contiguous() }
-        };
-        Ok((major(q)?, major(k)?, major(v)?))
+        Ok((self.rotary.apply(&split(q)?, offset)?, self.rotary.apply(&split(k)?, offset)?, split(v)?))
     }
 
-    /// `mask` is additive and broadcastable to (b, heads, s, s), or None for full attention.
+    /// Output projection of o (heads, rows, head_dim): (rows, hidden).
+    pub(crate) fn out(&self, o: &Tensor) -> Result<Tensor> {
+        out_proj(o, &self.wo)
+    }
+
+    /// `mask` is additive and laid out by `ModernBert::mask`, or None for full attention.
     fn forward(&self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
         let (b, s, d) = xs.dims3()?;
+        let (h, dh) = (self.heads, self.head_dim);
         let (q, k, v) = self.qkv(xs, 0)?;
-        let scale = (self.head_dim as f64).powf(-0.5);
-        let xs = if q.device().is_metal() {
-            // Fused kernel; it has no CPU implementation.
-            let mask = mask.map(|m| m.broadcast_as((b, self.heads, s, s))?.contiguous()).transpose()?;
-            sdpa(&q, &k, &v, mask.as_ref(), false, scale as f32, 1.0)?
+        let scale = (dh as f64).powf(-0.5);
+        let o = if q.device().is_metal() {
+            // Fused kernel, which has no CPU implementation; heads fold into its batch (index head·b + seq).
+            let fold = |x: &Tensor| x.reshape((1, h * b, s, dh));
+            sdpa(&fold(&q)?, &fold(&k)?, &fold(&v)?, mask, false, scale as f32, 1.0)?
         } else {
             let att = (q * scale)?.matmul(&k.t()?.contiguous()?)?;
             let att = match mask {
@@ -128,8 +133,27 @@ impl Attention {
             };
             softmax_last_dim(&att)?.matmul(&v)?
         };
-        xs.transpose(1, 2)?.reshape((b, s, d))?.apply(&self.proj)
+        self.out(&o.reshape((h, b * s, dh))?)?.reshape((b, s, d))
     }
+}
+
+/// Per-head output weights (heads, head_dim, hidden) of a Linear weight w (hidden, hidden): Linear computes
+/// x·wᵀ over head-major input columns, so head i uses w[:, i·head_dim..(i+1)·head_dim]ᵀ.
+fn heads_wo(w: &Tensor, heads: usize) -> Result<Tensor> {
+    let d = w.dim(0)?;
+    w.reshape((d, heads, d / heads))?.permute((1, 2, 0))?.contiguous()
+}
+
+/// o (heads, rows, head_dim) times wo (heads, head_dim, hidden), summed over heads. Summing contiguous
+/// per-head slices avoids the head-to-feature transpose, a strided copy on Metal; `sum(0)` is a strided
+/// reduce (10 ms on 6 × 2160 × 384) and is not used.
+fn out_proj(o: &Tensor, wo: &Tensor) -> Result<Tensor> {
+    let y = o.matmul(wo)?;
+    let mut acc = y.get(0)?;
+    for i in 1..y.dim(0)? {
+        acc = (acc + y.get(i)?)?;
+    }
+    Ok(acc)
 }
 
 pub(crate) struct Mlp {
@@ -249,11 +273,15 @@ impl ModernBert {
         self.mask(&Tensor::from_vec(band, (s, s), dev)?.to_dtype(self.embeddings.embeddings().dtype())?, 1, s)
     }
 
-    /// An additive mask broadcastable to (b, heads, s, s), in the layout attention reads. The fused Metal
-    /// kernel reads a dense mask; expanding it once per call instead of in every layer saves a strided
-    /// copy per layer (1.4 ms per local layer at 512 tokens). The CPU path broadcasts as it adds.
+    /// An additive mask broadcastable to (heads, b, s, s), in the layout attention reads. The fused Metal
+    /// kernel reads a dense mask with heads folded into its batch, (1, heads·b, s, s); expanding it once
+    /// per call instead of in every layer saves a strided copy per layer (1.4 ms per local layer at 512
+    /// tokens). The CPU path broadcasts as it adds.
     pub fn mask(&self, m: &Tensor, b: usize, s: usize) -> Result<Tensor> {
-        if m.device().is_metal() { m.broadcast_as((b, self.heads, s, s))?.contiguous() } else { Ok(m.clone()) }
+        if !m.device().is_metal() {
+            return Ok(m.clone());
+        }
+        m.broadcast_as((self.heads, b, s, s))?.contiguous()?.reshape((1, self.heads * b, s, s))
     }
 
     /// Runs `layers` on xs (b, s, hidden) with `global` / `local` masks on the global / local layers.
@@ -275,5 +303,22 @@ impl ModernBert {
     pub fn forward(&self, ids: &Tensor) -> Result<Tensor> {
         let band = self.band(ids.dim(1)?, ids.device())?;
         self.run(&self.embed(ids)?, 0..self.layers.len(), None, Some(&band))?.apply(&self.final_norm)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn out_matches_linear() {
+        let dev = Device::Cpu;
+        let (h, rows, dh) = (3, 5, 4);
+        let w = Tensor::randn(0f32, 1.0, (h * dh, h * dh), &dev).unwrap();
+        let o = Tensor::randn(0f32, 1.0, (h, rows, dh), &dev).unwrap();
+        let got = out_proj(&o, &heads_wo(&w, h).unwrap()).unwrap();
+        let want = o.permute((1, 0, 2)).unwrap().reshape((rows, h * dh)).unwrap().matmul(&w.t().unwrap()).unwrap();
+        let max = (got - want).unwrap().abs().unwrap().flatten_all().unwrap().max(0).unwrap();
+        assert!(max.to_scalar::<f32>().unwrap() <= 1e-5, "max |Δ| {max}");
     }
 }
