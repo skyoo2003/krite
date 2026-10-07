@@ -2,7 +2,7 @@
 
 The Rust runtime serves [Protocol v1](protocol/v1.md) on `POST /v1/systemone`. It encodes each state once, independently of any question, keeps the resulting state memory in a cross-request cache, and scores every candidate with the late-interaction decision tower that the [architecture study](architecture-study.md) accepted (`late8`). Terms follow [ARCHITECTURE.md](../ARCHITECTURE.md).
 
-The model behind it is `krite-0.15b-v0`: the study's `late8` checkpoint (mmBERT-small, 32,000 training examples, seed 13) with per-bucket temperatures. It is a pre-release model; quality numbers are the study's, not a release claim.
+The model behind it is `krite-0.15b-v0`: the study's `late8` checkpoint (mmBERT-small, 32,000 training examples, seed 13) with per-bucket temperatures. It is a pre-release model; quality numbers are the study's, not a release claim. Its successor `krite-0.15b-v1` (`late8-broad`: the same architecture on the broad training mixture, [training-data.md](training-data.md)) passes every release gate except accuracy (shortfall 0.783, down from 1.416); serve it with `--model training/ckpt/late8-broad/candle`. The measurements below are v0's.
 
 ## Crates
 

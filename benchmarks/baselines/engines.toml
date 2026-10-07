@@ -345,3 +345,28 @@ model = "arch-late8-e2-s14"
 backend = "torch-mps"
 precision = "fp32"
 start = "python shims/arch_shim.py --ckpt ../../training/ckpt/late8-e2-s14 --port 8146"
+
+# Release model (docs/training-data.md): late8-broad, seed 13. Temperatures are fitted on krite-v1-raw.
+[krite-v1]
+port = 8147
+venv = false
+model = "krite-0.15b-v1"
+backend = "candle-metal"
+precision = "fp32"
+start = "../../target/release/krite serve --port 8147 --model ../../training/ckpt/late8-broad/candle"
+
+[krite-v1-raw]
+port = 8148
+venv = false
+model = "krite-0.15b-v1"
+backend = "candle-metal"
+precision = "fp32"
+start = "../../target/release/krite serve --port 8148 --model ../../training/ckpt/late8-broad/candle --raw"
+
+[krite-v1-nocache]
+port = 8149
+venv = false
+model = "krite-0.15b-v1"
+backend = "candle-metal"
+precision = "fp32"
+start = "../../target/release/krite serve --port 8149 --model ../../training/ckpt/late8-broad/candle --state-cache-mb 0 --candidate-cache-mb 0"
