@@ -16,6 +16,8 @@ The model behind it is `krite-0.15b-v0`: the study's `late8` checkpoint (mmBERT-
 
 ## Build and serve
 
+Install from the registries: `cargo install krite-cli` and `hf download skyoo2003/krite-0.15b-v1 --local-dir krite-0.15b-v1`, then `krite serve --model krite-0.15b-v1` ([model card](https://huggingface.co/skyoo2003/krite-0.15b-v1)). Building from source:
+
 ```bash
 (cd training && uv run python -m krite_train.export --ckpt ckpt/late8)   # model directory, once
 cargo build --release -p krite-cli

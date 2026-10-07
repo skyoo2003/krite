@@ -54,3 +54,22 @@ def test_synthetic_state_exact_tokens_and_distinct():
     assert len(states) == 3
     assert all(d.count_tokens(s) == 512 for s in states)
     jsonschema.validate(d.latency_request(64, 4, 8, 0), SCHEMA)
+
+
+def test_root_from_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("KRITE_ROOT", str(tmp_path))
+    assert d.find_root() == tmp_path.resolve()
+
+
+def test_root_defaults_to_checkout(monkeypatch):
+    monkeypatch.delenv("KRITE_ROOT", raising=False)
+    assert (d.find_root() / "benchmarks" / "krite_bench").is_dir()
+
+
+def test_bundled_schemas_match_spec(monkeypatch):
+    monkeypatch.delenv("KRITE_ROOT", raising=False)
+    spec = d.find_root() / "docs" / "protocol"
+    names = sorted(p.name for p in spec.glob("*.schema.json"))
+    assert names == sorted(p.name for p in d.SCHEMA_DIR.glob("*.schema.json"))
+    for n in names:
+        assert (d.SCHEMA_DIR / n).read_bytes() == (spec / n).read_bytes(), n

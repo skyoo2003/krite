@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://krite.dev/protocol/v1/response.schema.json",
+  "title": "Krite Protocol v1 Response",
+  "type": "object",
+  "required": ["model", "answers", "usage", "latency_ms"],
+  "additionalProperties": false,
+  "properties": {
+    "model": { "type": "string", "minLength": 1 },
+    "answers": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z0-9_.-]{1,64}$" },
+      "additionalProperties": { "$ref": "#/$defs/answer" }
+    },
+    "usage": {
+      "type": "object",
+      "required": ["input_tokens", "output_tokens"],
+      "additionalProperties": false,
+      "properties": {
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "const": 0 }
+      }
+    },
+    "latency_ms": { "type": "number", "minimum": 0 }
+  },
+  "$defs": {
+    "prob": { "type": "number", "minimum": 0, "maximum": 1 },
+    "probabilities": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/prob" }
+    },
+    "answer": {
+      "oneOf": [
+        { "$ref": "#/$defs/choiceAnswer" },
+        { "$ref": "#/$defs/scoreAnswer" },
+        { "$ref": "#/$defs/noulAnswer" }
+      ]
+    },
+    "choiceAnswer": {
+      "type": "object",
+      "required": ["type", "choice", "probabilities", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "choice" },
+        "choice": { "type": "string", "minLength": 1 },
+        "probabilities": { "$ref": "#/$defs/probabilities" },
+        "confidence": { "$ref": "#/$defs/prob" }
+      }
+    },
+    "scoreAnswer": {
+      "type": "object",
+      "required": ["type", "score", "legend", "probabilities", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "score" },
+        "score": { "type": "number", "minimum": 0 },
+        "legend": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^[0-9]+$" },
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "probabilities": { "$ref": "#/$defs/probabilities" },
+        "confidence": { "$ref": "#/$defs/prob" }
+      }
+    },
+    "noulAnswer": {
+      "type": "object",
+      "required": ["type", "noul"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "noul" },
+        "noul": { "$ref": "#/$defs/prob" }
+      }
+    }
+  }
+}

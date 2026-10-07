@@ -20,10 +20,10 @@ import numpy as np
 
 from . import metrics
 from .client import Engine, engine_config
-from .data import SEED, interference_request, latency_request, load_suite, suites
+from .data import ROOT, SEED, interference_request, latency_request, load_suite, suites
 from .env import commit, latest, now, power_source, therm
 
-RESULTS_DIR = Path(__file__).resolve().parents[1] / "results" / "baselines"
+RESULTS_DIR = ROOT / "benchmarks" / "results" / "baselines"
 WARMUP, MEASURED = 20, 200
 BUDGET_S = 15 * 60
 CELLS = {
@@ -436,7 +436,7 @@ def run_startup(engine: str, out: Path = RESULTS_DIR) -> None:
     process-launch-to-ready time (benchmark-spec §3 startup is approximated, see `probe`).
     Engine must not be running.
     """
-    serve = Path(__file__).resolve().parents[1] / "baselines" / "serve.sh"
+    serve = ROOT / "benchmarks" / "baselines" / "serve.sh"
     t0 = time.perf_counter()
     subprocess.run([str(serve), engine], check=True, capture_output=True, text=True)
     ms = (time.perf_counter() - t0) * 1000
@@ -478,11 +478,10 @@ def encoder_rows(results: dict[str, dict], env_ref: str) -> list[dict]:
 
 def run_encoder(tokens: str = "64,512,2048", out: Path = RESULTS_DIR) -> None:
     """Candle (`krite bench-encoder`), then torch (`encoder_torch.py`), one at a time; no engine may be serving."""
-    root = Path(__file__).resolve().parents[2]
-    baselines = root / "benchmarks" / "baselines"
+    baselines = ROOT / "benchmarks" / "baselines"
     torch_python = baselines / ".venvs" / ENCODER_REFERENCE / "bin" / "python"
     cmds = {
-        "krite": [str(root / "target" / "release" / "krite"), "bench-encoder", "--tokens", tokens],
+        "krite": [str(ROOT / "target" / "release" / "krite"), "bench-encoder", "--tokens", tokens],
         ENCODER_REFERENCE: [str(torch_python), str(baselines / "encoder_torch.py"), "--tokens", tokens],
     }
     results = {}

@@ -299,7 +299,7 @@ wheels = [
 
 [[package]]
 name = "krite-bench"
-version = "0.0.0"
+version = "0.1.0"
 source = { editable = "../benchmarks" }
 dependencies = [
     { name = "httpx" },
@@ -329,7 +329,7 @@ dev = [
 
 [[package]]
 name = "krite-train"
-version = "0.0.0"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "huggingface-hub" },
