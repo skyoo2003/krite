@@ -1,0 +1,35 @@
+[build-system]
+requires = ["maturin>=1.15,<2"]
+build-backend = "maturin"
+
+[project]
+name = "krite"
+version = "0.1.0"
+description = "Krite decision runtime in process: Protocol v1 answers from Python, no server"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+classifiers = ["Programming Language :: Rust", "Programming Language :: Python :: Implementation :: CPython"]
+
+[project.urls]
+Repository = "https://github.com/skyoo2003/krite"
+Documentation = "https://github.com/skyoo2003/krite/blob/main/docs/runtime.md#python"
+
+[dependency-groups]
+dev = ["maturin>=1.15,<2", "pytest>=8", "ruff>=0.5"]
+
+[tool.maturin]
+module-name = "krite._krite"
+
+# scripts/check-python.sh builds the extension into this venv with `maturin develop`.
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

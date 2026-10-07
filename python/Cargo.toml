@@ -1,0 +1,21 @@
+[package]
+name = "krite-py"
+description = "Python bindings for the Krite runtime (PyPI: krite)"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "_krite"
+crate-type = ["cdylib"]
+test = false
+doctest = false
+
+[dependencies]
+krite-candle.workspace = true
+krite-core.workspace = true
+krite-runtime.workspace = true
+serde_json.workspace = true
+pyo3 = { version = "0.29", features = ["abi3-py311", "extension-module"] }

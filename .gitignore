@@ -11,8 +11,10 @@ benchmarks/data/
 __pycache__/
 .venv/
 
-# Rust build output
+# Rust build output, and the extension `maturin develop` builds into python/krite/
 /target/
+*.so
+python/dist/
 
 # Training: checkpoints stay local.
 training/ckpt/
