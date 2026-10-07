@@ -27,5 +27,5 @@ jobs:
         check: [spec, bench, train]
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0
       - run: scripts/check-${{ matrix.check }}.sh
