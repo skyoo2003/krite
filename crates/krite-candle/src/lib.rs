@@ -47,6 +47,18 @@ pub fn bench_ids(n: usize) -> Vec<u32> {
     v
 }
 
+/// Choice candidates for `questions` questions of `options` options each, for model-layer timing; keep
+/// in sync with `latency_request` in `benchmarks/krite_bench/data.py`.
+pub fn bench_candidates(b: &CandleBackend, questions: usize, options: usize) -> anyhow::Result<Vec<Candidate>> {
+    let criteria: Vec<(String, Option<String>)> = (0..options).map(|j| (format!("option {j}"), None)).collect();
+    let mut cands = Vec::new();
+    for i in 0..questions {
+        let ins = format!("Question {i}: which option fits the text best?");
+        cands.extend(b.candidate_ids(&ins, &criteria)?.into_iter().map(|ids| Candidate { kind: "choice", ids }));
+    }
+    Ok(cands)
+}
+
 /// `<bos> instructions option <eos>` within `max` ids; the option keeps up to `max_option` ids first.
 fn frame(bos: u32, mut ins: Vec<u32>, mut opt: Vec<u32>, eos: u32, max: usize, max_option: usize) -> Vec<u32> {
     opt.truncate(max_option);
