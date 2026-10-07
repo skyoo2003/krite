@@ -1,34 +1,56 @@
-# Publishes krite-bench and krite-train to PyPI and the five crates to crates.io on a version tag.
-# Both registries use Trusted Publishing; reruns skip what is already published.
+# Publishes one package per tag, `<package>-vX.Y.Z`, after checking the tag against the package's
+# manifest. Every package has its own version line; the procedure is in RELEASING.md.
+# Both registries use Trusted Publishing; a rerun skips a version that is already published.
 name: release
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "krite-bench-v*"
+      - "krite-train-v*"
+      - "krite-core-v*"
+      - "krite-runtime-v*"
+      - "krite-candle-v*"
+      - "krite-server-v*"
+      - "krite-cli-v*"
 permissions: {}
 jobs:
   version:
     runs-on: ubuntu-latest
     permissions: {contents: read}
+    outputs:
+      package: ${{ steps.tag.outputs.package }}
+      registry: ${{ steps.tag.outputs.registry }}
+      version: ${{ steps.tag.outputs.version }}
+      dir: ${{ steps.tag.outputs.dir }}
     steps:
       - uses: actions/checkout@v7
-      - name: Tag matches every manifest
+      - name: Tag matches its manifest
+        id: tag
         run: |
-          v="${GITHUB_REF_NAME#v}"
-          for f in Cargo.toml benchmarks/pyproject.toml training/pyproject.toml; do
-            grep -qx "version = \"$v\"" "$f" || { echo "FAIL: $f is not $v" >&2; exit 1; }
-          done
+          package="${GITHUB_REF_NAME%-v*}" v="${GITHUB_REF_NAME##*-v}"
+          case "$package" in
+            krite-bench) registry=pypi dir=benchmarks ;;
+            krite-train) registry=pypi dir=training ;;
+            krite-core|krite-runtime|krite-candle|krite-server|krite-cli) registry=crates dir="crates/$package" ;;
+            *) echo "FAIL: unknown package $package" >&2; exit 1 ;;
+          esac
+          f="$dir/$([ "$registry" = pypi ] && echo pyproject.toml || echo Cargo.toml)"
+          grep -qx "version = \"$v\"" "$f" || { echo "FAIL: $f is not $v" >&2; exit 1; }
+          { echo "package=$package"; echo "registry=$registry"; echo "version=$v"; echo "dir=$dir"; } >> "$GITHUB_OUTPUT"
   pypi:
     needs: version
+    if: needs.version.outputs.registry == 'pypi'
     runs-on: ubuntu-latest
     environment: pypi
     permissions: {contents: read, id-token: write}
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0
-      - run: uv build --no-sources benchmarks -o dist && uv build --no-sources training -o dist
+      - run: uv build --no-sources "${{ needs.version.outputs.dir }}" -o dist
       - run: uv publish --trusted-publishing always --check-url https://pypi.org/simple/ dist/*
   crates:
     needs: version
+    if: needs.version.outputs.registry == 'crates'
     runs-on: ubuntu-latest
     environment: crates-io
     permissions: {contents: read, id-token: write}
@@ -37,15 +59,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
-      - name: Publish in dependency order, skipping versions already on crates.io
+      - name: Publish, unless this version is already on crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          PACKAGE: ${{ needs.version.outputs.package }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          v="${GITHUB_REF_NAME#v}"
-          for c in krite-core krite-runtime krite-candle krite-server krite-cli; do
-            if curl -sf -A "krite-release (github.com/skyoo2003/krite)" "https://crates.io/api/v1/crates/$c/$v" >/dev/null; then
-              echo "$c $v already published"
-            else
-              cargo publish -p "$c" --locked
-            fi
-          done
+          if curl -sf -A "krite-release (github.com/skyoo2003/krite)" "https://crates.io/api/v1/crates/$PACKAGE/$VERSION" >/dev/null; then
+            echo "$PACKAGE $VERSION already published"
+          else
+            cargo publish -p "$PACKAGE" --locked
+          fi
