@@ -177,3 +177,18 @@ def test_release_gate(tmp_path):
     release_results(tmp_path, calibration=False)
     v = run()
     assert not v["release"] and v["gates"]["ECE"]["value"] is None
+
+
+def test_feasibility_reads_only_latency(tmp_path):
+    release_results(tmp_path)
+    v = study.feasibility(tmp_path, "k")
+    assert v["feasible"] and set(v["gates"]) == {
+        "warm latency (ms)",
+        "cold latency (ms)",
+        "decisions/sec (30 questions)",
+    }
+    release_results(tmp_path, warm=10.5)
+    v = study.feasibility(tmp_path, "k")
+    assert not v["feasible"] and not v["gates"]["warm latency (ms)"]["pass"]
+    v = study.feasibility(tmp_path, "untimed")
+    assert not v["feasible"] and v["gates"]["cold latency (ms)"]["value"] is None

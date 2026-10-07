@@ -1,0 +1,21 @@
+{
+  "engine": "krite-base-pilot",
+  "gates": {
+    "warm latency (ms)": {
+      "value": 18.726791,
+      "limit": 10.0,
+      "pass": false
+    },
+    "cold latency (ms)": {
+      "value": 219.0202295,
+      "limit": 210.0,
+      "pass": false
+    },
+    "decisions/sec (30 questions)": {
+      "value": 77.11329802939177,
+      "limit": 175.0,
+      "pass": false
+    }
+  },
+  "feasible": false
+}

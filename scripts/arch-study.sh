@@ -49,7 +49,7 @@ for engine in $ENGINES; do
   if [[ "$engine" == *-nocache ]]; then
     kb quality --engine "$engine" --suites "$CACHE_SUITES"
   else
-    if [[ "$engine" == arch-b || "$engine" == arch-d2 || "$engine" == arch-late4 || "$engine" == krite || "$engine" == krite-v1 ]]; then
+    if [[ "$engine" == arch-b || "$engine" == arch-d2 || "$engine" == arch-late4 || "$engine" == krite || "$engine" == krite-v1 || "$engine" == krite-base ]]; then
       kb latency --engines "$engine" --mode sustained
     fi
     kb quality --engine "$engine" --memory

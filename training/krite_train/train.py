@@ -1,10 +1,10 @@
-"""Trains one arm from mmBERT-small (krite_train.model.ARMS) on a training mixture (krite_train.data).
+"""Trains one arm (krite_train.model.ARMS) on a training mixture (krite_train.data).
 
     uv run python -m krite_train.train --arm d2            # full run → training/ckpt/d2/
     uv run python -m krite_train.train --arm b --scale 0.02 # pilot
 
-Arms use the study mixture and cross-entropy unless their spec says otherwise (`mixture`, `brier`,
-`ordinal`, `epochs`; docs/training-data.md). Arms with the same data spec and seed see the same
+Arms use mmBERT-small, the study mixture, and cross-entropy unless their spec says otherwise (`encoder`,
+`mixture`, `brier`, `ordinal`, `epochs`; docs/training-data.md). Arms with the same data spec and seed see the same
 examples in the same order.
 """
 
@@ -16,7 +16,7 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from krite_bench.data import SEED, TOKENIZER_REPO, TOKENIZER_REVISION
+from krite_bench.data import SEED
 from transformers import get_linear_schedule_with_warmup
 
 from . import data
@@ -144,8 +144,8 @@ def main() -> None:
     meta = {
         "arm": a.arm,
         **m.ARMS[a.arm],
-        "base": TOKENIZER_REPO,
-        "revision": TOKENIZER_REVISION,
+        "base": m.encoder_source(spec)[0],
+        "revision": m.encoder_source(spec)[1],
         "examples": len(examples),
         "trained_examples": steps * a.batch,
         "train_sha256": sources.pop("train_sha256"),

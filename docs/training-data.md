@@ -94,6 +94,48 @@ outside this recipe: a larger encoder (mmBERT-base, ~0.4B) or a revised accuracy
 Applied to today's `krite-0.15b-v0`, the gate passes every row except accuracy: ECE 0.058, warm
 7.8 ms, cold 91 ms, 183 decisions/s, flip rate 0, isolation 5.3e-7, cache 0.
 
+## Encoder
+
+The recipe search ended with every gate passing except accuracy (see Results). The rules above send
+the next step outside the recipe, and this section is that step: the final recipe (`late8`, `broad`,
+cross-entropy, one epoch, same learning rates and batch) on a larger encoder. Fixed before its pilot
+ran.
+
+| | mmBERT-small | mmBERT-base |
+|---|---|---|
+| Repo @ revision | `jhu-clsp/mmBERT-small` @ `abc32620` | `jhu-clsp/mmBERT-base` @ `c5955035` |
+| Hidden size, heads (head dim) | 384, 6 (64) | 768, 12 (64) |
+| Layers, intermediate size | 22, 1,152 | 22, 1,152 |
+| Parameters (embedding / rest) | ≈ 98M / 42M | ≈ 197M / 110M |
+| Tokenizer | identical `tokenizer.json` | identical `tokenizer.json` |
+| License | MIT | MIT |
+
+Layer count, attention pattern, RoPE, and tokenizer are shared, so `late8` keeps its split (14 lower,
+8 late layers), training data tokenizes identically, and the Candle runtime reads every size from
+`config.json`. Per token, base costs about 2.6× small's non-embedding compute.
+
+**Feasibility.** Latency depends on shapes and kernels, not on trained weights, so a 1% pilot of
+`base8-broad` (`krite_train.train --scale 0.01`) is exported, served by Candle as `krite-base-pilot`,
+and timed in the release gate's latency cells before any full training run. Every row must hold, or
+the encoder stage stops before training:
+
+| Check | Passes when |
+|---|---|
+| Candle numerics | the ignored `krite-candle` weight tests pass on the pilot export |
+| warm latency | HTTP p50, burst, 512-token state, 1 question, 4 options ≤ 10 ms |
+| cold latency | same cell, state cache miss ≤ 210 ms |
+| throughput | 30 questions / warm HTTP p50 at 512 tokens, 30 questions, 4 options ≥ 175 decisions/s |
+| training memory | pilot MPS peak ≤ 10 GiB; above it, the pilot reruns with two-step gradient accumulation (same examples per optimizer step) and must then fit |
+
+`krite_train.study feasibility` applies the three latency rows.
+
+**Encoder stage (E).** The stage rule above, unchanged: `broad` on small (`arch-late8-broad`, `-s14`)
+vs `broad` on base (`arch-base8-broad`, `-s14`). Nothing is retuned after a seed's result is seen.
+
+**Release.** If E adopts base, its seed-13 run ships as `krite-0.3b-v0` and goes through the same
+release gate. If E rejects base or the gate fails, `krite-0.15b-v1` stays the best model, and the next
+step is a revised accuracy target.
+
 ## Sources
 
 Every source is pinned to a Hugging Face revision. Rows whose state appears in any evaluation suite
@@ -814,3 +856,31 @@ The broad mixture closed most of xnli. Each later change (Brier, ordinal, two ep
 13 and lost at seed 14. The remaining gap sits in three held-out tasks: topic (agnews), passage QA
 (boolq), and fine-grained sentiment (sst5). As fixed in the rules above, the next step is outside
 this recipe: a larger encoder (mmBERT-base, ~0.4B) or a revised accuracy target.
+
+### Feasibility: mmBERT-base
+
+1% pilot of `base8-broad` (740 examples, 43 steps), exported and served as `krite-base-pilot` on
+Candle Metal, engine alone on AC power. Raw output:
+[`feasibility-base.json`](../benchmarks/results/arch/feasibility-base.json).
+
+| Check | Limit | `krite-0.15b-v1` | mmBERT-base pilot | Pass |
+|---|---|---|---|---|
+| Candle numerics | weight tests pass | pass | pass (3 of 3) | yes |
+| warm latency p50 | ≤ 10 ms | 7.8 ms | 18.7 ms | **no** |
+| cold latency p50 | ≤ 210 ms | 90 ms | 219 ms | **no** |
+| throughput (30 questions) | ≥ 175 decisions/s | 212 | 77 | **no** |
+| training memory (MPS peak) | ≤ 10 GiB | 6.1 GiB | 11.7 GiB | no (accumulation not tried) |
+
+**Verdict: infeasible; the encoder stage stops before training.** Every latency cell is about 2.4×
+small's (warm 512/10/4: 44 → 130 ms; cold 512/30/4: 225 → 662 ms), close to the 2.6× ratio of
+non-embedding compute, so the fp32 Candle path is compute-bound at this size rather than
+overhead-bound. The pilot has 307.5M parameters (196.6M embedding, 110.9M other) and trained at
+3.2 examples/s. Because the latency rows already fail, the memory fallback was not run.
+
+### Stage E: encoder
+
+Not run: feasibility failed.
+
+### Release gate: mmBERT-base
+
+Not run: feasibility failed. `krite-0.15b-v1` stays the best model.

@@ -5,6 +5,7 @@ uv run python -m krite_train.study compare --a arch-d2 --b arch-d2-nocache
 uv run python -m krite_train.study verdict
 uv run python -m krite_train.study stage --base arch-late8,arch-late8-s14 --new arch-late8-broad,arch-late8-broad-s14
 uv run python -m krite_train.study release --engine krite-v1 --raw krite-v1-raw --nocache krite-v1-nocache
+uv run python -m krite_train.study feasibility --engine krite-base-pilot
 """
 
 from __future__ import annotations
@@ -227,28 +228,42 @@ def mean_scaled_ece(out: Path, raw: str) -> float | None:
     return _mean([r["scaled_eval_half"]["ece"] for (e, _), r in rows.items() if e == raw])
 
 
+def _at_most(v, cap):
+    return {"value": v, "limit": cap, "pass": v is not None and v <= cap}
+
+
+def _at_least(v, floor):
+    return {"value": v, "limit": floor, "pass": v is not None and v >= floor}
+
+
+def latency_gates(out: Path, engine: str) -> dict:
+    """The release gate's latency rows; they depend on shapes, not trained weights."""
+    warm30 = latency_p50(out, engine, "warm", 30)
+    return {
+        "warm latency (ms)": _at_most(latency_p50(out, engine, "warm", 1), RELEASE["warm_ms"]),
+        "cold latency (ms)": _at_most(latency_p50(out, engine, "cold", 1), RELEASE["cold_ms"]),
+        "decisions/sec (30 questions)": _at_least(30_000 / warm30 if warm30 else None, RELEASE["dec_per_s"]),
+    }
+
+
+def feasibility(out: Path, engine: str) -> dict:
+    """Latency rows of the release gate on an untrained export, before any full training run."""
+    gates = latency_gates(out, engine)
+    return {"engine": engine, "gates": gates, "feasible": all(g["pass"] for g in gates.values())}
+
+
 def release(out: Path, engine: str, raw: str, nocache: str, tg: dict[str, float]) -> dict:
     """Release gate. Missing data fails a gate, never passes it."""
-
-    def at_most(v, cap):
-        return {"value": v, "limit": cap, "pass": v is not None and v <= cap}
-
-    def at_least(v, floor):
-        return {"value": v, "limit": floor, "pass": v is not None and v >= floor}
-
     total, per = shortfall(out, engine, tg)
-    warm30 = latency_p50(out, engine, "warm", 30)
     inv = invariants(out, engine)
     gates = {
-        "accuracy shortfall": at_most(total, 0.0),
-        "ECE": at_most(mean_scaled_ece(out, raw), RELEASE["ece"]),
-        "warm latency (ms)": at_most(latency_p50(out, engine, "warm", 1), RELEASE["warm_ms"]),
-        "cold latency (ms)": at_most(latency_p50(out, engine, "cold", 1), RELEASE["cold_ms"]),
-        "decisions/sec (30 questions)": at_least(30_000 / warm30 if warm30 else None, RELEASE["dec_per_s"]),
-        "I1 flip rate": at_most(inv["flip_rate"], 0.0),
-        "I1 invariance max dev": at_most(inv["invariance_max_dev"], TOL),
-        "I2 interference max dev": at_most(inv["interference_max_dev"], TOL),
-        "I3 cache on/off max dev": at_most(compare(out, engine, nocache), TOL),
+        "accuracy shortfall": _at_most(total, 0.0),
+        "ECE": _at_most(mean_scaled_ece(out, raw), RELEASE["ece"]),
+        **latency_gates(out, engine),
+        "I1 flip rate": _at_most(inv["flip_rate"], 0.0),
+        "I1 invariance max dev": _at_most(inv["invariance_max_dev"], TOL),
+        "I2 interference max dev": _at_most(inv["interference_max_dev"], TOL),
+        "I3 cache on/off max dev": _at_most(compare(out, engine, nocache), TOL),
     }
     return {
         "engine": engine,
@@ -260,7 +275,7 @@ def release(out: Path, engine: str, raw: str, nocache: str, tg: dict[str, float]
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["compare", "verdict", "stage", "release"])
+    ap.add_argument("cmd", choices=["compare", "verdict", "stage", "release", "feasibility"])
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--a", default="arch-d2")
     ap.add_argument("--b", default="arch-d2-nocache")
@@ -268,7 +283,7 @@ def main() -> None:
     ap.add_argument("--baselines", type=Path, default=BASELINES, help="stage/release: baseline results directory")
     ap.add_argument("--base", help="stage: comma-separated engines, one per seed")
     ap.add_argument("--new", help="stage: comma-separated engines, same seed order as --base")
-    ap.add_argument("--engine", default="krite-v1", help="release: calibrated engine")
+    ap.add_argument("--engine", default="krite-v1", help="release: calibrated engine; feasibility: engine to time")
     ap.add_argument("--raw", default="krite-v1-raw", help="release: engine the temperatures were fitted on")
     ap.add_argument("--nocache", default="krite-v1-nocache", help="release: the engine with both caches off")
     a = ap.parse_args()
@@ -283,6 +298,8 @@ def main() -> None:
         if not a.base or not a.new:
             raise SystemExit("stage needs --base and --new")
         print(json.dumps(stage(a.out, a.base.split(","), a.new.split(","), targets(a.baselines)), indent=2))
+    elif a.cmd == "feasibility":
+        print(json.dumps(feasibility(a.out, a.engine), indent=2))
     else:
         print(json.dumps(release(a.out, a.engine, a.raw, a.nocache, targets(a.baselines)), indent=2))
 

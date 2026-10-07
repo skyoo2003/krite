@@ -1,6 +1,6 @@
 """Export a late-interaction checkpoint as a model directory for `krite serve --model <dir>`.
 
-The directory holds `model.safetensors` (the torch state dict, same key names), the base model's
+The directory holds `model.safetensors` (the torch state dict, same key names), the encoder's
 `config.json` and `tokenizer.json` (the checkpoint re-saves them in a format the Rust side does not
 read; the token ids are identical), `krite.json` (model id, tower shape, calibration temperatures), and
 `probe.json`: torch CPU energies on synthetic text that the Rust weight tests compare against.
@@ -52,6 +52,13 @@ def require_raw(engines: Path, engine: str) -> None:
         raise SystemExit(
             f"engine {engine!r} does not serve raw probabilities (`--raw`); fit temperatures on one that does"
         )
+
+
+def base_files(d: Path, meta: dict) -> None:
+    """Copy `config.json` and `tokenizer.json` of the encoder the checkpoint was trained from."""
+    repo, rev = meta.get("base", TOKENIZER_REPO), meta.get("revision", TOKENIZER_REVISION)
+    for f in ("config.json", "tokenizer.json"):
+        shutil.copyfile(hf_hub_download(repo, f, revision=rev), d / f)
 
 
 def publish(out: Path, write: Callable[[Path], None]) -> None:
@@ -122,8 +129,7 @@ def main() -> None:
 
     def write(d: Path) -> None:
         save_file({k: v.contiguous() for k, v in net.state_dict().items()}, d / "model.safetensors")
-        for f in ("config.json", "tokenizer.json"):
-            shutil.copyfile(hf_hub_download(TOKENIZER_REPO, f, revision=TOKENIZER_REVISION), d / f)
+        base_files(d, meta)
         manifest = {
             "model_id": a.model_id,
             "arm": arm,
