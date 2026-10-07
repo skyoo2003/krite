@@ -78,7 +78,7 @@ with TypeSafeClient(api_key="any", base_url="http://127.0.0.1:8110") as client:
 - Score answers key `probabilities` and `legend` by level index, which the SDK reads as integer keys.
 - Wire differences that remain are listed in [Protocol v1 §7](protocol/v1.md#7-differences-from-jev).
 
-`compat/jev` is the conformance suite: it drives the server through the SDK (pinned to 0.7.2, sync and async clients) and checks shapes, keys, sums, the alias, `GET /v1/models`, SDK-legal request forms (array or object state, absent or JSON instructions, JSON criteria), state key-order invariance, and 422 errors. It never checks answer values, so it runs against any model. `scripts/check-compat.sh` runs it against the weight-free `hash_server` example (CI: `.github/workflows/compat.yml`); against a real model, start `krite serve` and run `KRITE_BASE_URL=http://127.0.0.1:8110 uv run pytest -q` in `compat/jev`. `krite-0.15b-v1` passes it.
+`compat/jev` is the conformance suite: it drives the server through the SDK (pinned to 0.7.2, sync and async clients) and checks shapes, keys, sums, the alias, `GET /v1/models`, SDK-legal request forms (array or object state, absent or JSON instructions, JSON criteria), state key-order invariance, and 422 errors. It never checks answer values, so it runs against any model. `scripts/check-compat.sh` runs it against the weight-free `hash_server` example (CI: the `compat` job in `.github/workflows/ci.yml`); against a real model, start `krite serve` and run `KRITE_BASE_URL=http://127.0.0.1:8110 uv run pytest -q` in `compat/jev`. `krite-0.15b-v1` passes it.
 
 ## Measured
 
