@@ -1,9 +1,14 @@
 {
   "engine": "krite-v1",
   "gates": {
-    "accuracy shortfall": {
-      "value": 0.7826013668949743,
-      "limit": 0.0,
+    "accuracy (macro, choice and noul)": {
+      "value": 0.7834625,
+      "limit": 0.7946875,
+      "pass": false
+    },
+    "QWK (macro, score)": {
+      "value": 0.2727053742507948,
+      "limit": 0.35713756793546375,
       "pass": false
     },
     "ECE": {
@@ -57,5 +62,15 @@
     "amazon-score-ja": 0.01578125600900017,
     "amazon-score-zh": 0.0700667605524692
   },
-  "release": false
+  "release": false,
+  "reference": {
+    "laya": {
+      "accuracy": 0.7593375,
+      "qwk": 0.22833142158480346
+    },
+    "cbjev": {
+      "accuracy": 0.8146875,
+      "qwk": 0.37713756793546377
+    }
+  }
 }

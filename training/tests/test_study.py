@@ -165,7 +165,8 @@ def release_results(tmp_path, warm: float = 7.8, acc: float = 0.79, calibration:
 
 def test_release_gate(tmp_path):
     tg = baseline(tmp_path)
-    run = lambda: study.release(tmp_path, "k", "k-raw", "k-nocache", tg)  # noqa: E731
+    ref = study.reference(tmp_path / "baselines")
+    run = lambda: study.release(tmp_path, "k", "k-raw", "k-nocache", tg, ref)  # noqa: E731
     release_results(tmp_path)
     v = run()
     assert v["release"], v["gates"]
@@ -192,3 +193,23 @@ def test_feasibility_reads_only_latency(tmp_path):
     assert not v["feasible"] and not v["gates"]["warm latency (ms)"]["pass"]
     v = study.feasibility(tmp_path, "untimed")
     assert not v["feasible"] and v["gates"]["cold latency (ms)"]["value"] is None
+
+
+def test_reference_takes_the_best_whole_engine(tmp_path):
+    """Laya leads agnews only (0.90, else 0.60); cbjev is 0.70 everywhere. A per-suite best would ask for
+    0.88 on agnews; the whole-engine macro asks for cbjev's 0.70 minus the margin."""
+    base = tmp_path / "baselines"
+    base.mkdir()
+    rows = []
+    for s in suites():
+        for engine, acc in (("laya", 0.90 if s.dataset == "agnews" else 0.60), ("cbjev", 0.70)):
+            metric = {"qwk": 0.5} if s.type == "score" else {"accuracy": acc}
+            rows.append({"engine": engine, "suite": s.id, "error_rate": 0.0, **metric})
+    write(base / "quality.jsonl", rows)
+    ref = study.reference(base)
+    families = {s.dataset for s in suites() if s.type != "score"}
+    assert abs(ref["engines"]["laya"]["accuracy"] - (0.90 + 0.60 * (len(families) - 1)) / len(families)) < 1e-9
+    assert abs(ref["targets"]["accuracy"] - 0.68) < 1e-9 and abs(ref["targets"]["qwk"] - 0.48) < 1e-9
+    write(base / "quality.jsonl", rows[1:])
+    with pytest.raises(SystemExit):
+        study.reference(base)
