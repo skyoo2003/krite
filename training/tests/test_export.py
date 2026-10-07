@@ -59,3 +59,23 @@ def test_failed_export_keeps_the_previous_model(tmp_path):
     publish(out, lambda staging: (staging / "model.safetensors").write_text("new"))
     assert (out / "model.safetensors").read_text() == "new"
     assert sorted(p.name for p in tmp_path.iterdir()) == ["candle"]
+
+
+def test_base_files_follow_the_checkpoint_encoder(tmp_path, monkeypatch):
+    import krite_train.export as ex
+
+    calls = []
+
+    def fake(repo, f, revision):
+        calls.append((repo, revision))
+        (tmp_path / "src").mkdir(exist_ok=True)
+        (tmp_path / "src" / f).write_text(repo)
+        return tmp_path / "src" / f
+
+    monkeypatch.setattr(ex, "hf_hub_download", fake)
+    ex.base_files(tmp_path, {"base": "jhu-clsp/mmBERT-base", "revision": "r"})
+    assert set(calls) == {("jhu-clsp/mmBERT-base", "r")}
+    assert (tmp_path / "config.json").read_text() == "jhu-clsp/mmBERT-base"
+    calls.clear()
+    ex.base_files(tmp_path, {})  # checkpoints from before the encoder field
+    assert {c[0] for c in calls} == {ex.TOKENIZER_REPO}

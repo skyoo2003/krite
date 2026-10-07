@@ -142,3 +142,10 @@ def test_late_packed_row_matches_one_row_per_candidate():
     two_ids, two_mask = padded([STATE, STATE])  # two state rows take the per-candidate path
     rows = m.energies(m.encode_state(two_ids, two_mask), two_mask, owner, ids, mask, qt)
     assert (packed - rows).abs().max() <= TOL
+
+
+def test_encoder_source_defaults_to_small():
+    from krite_train.model import ARMS, encoder_source
+
+    assert encoder_source(ARMS["late8-broad"])[0] == "jhu-clsp/mmBERT-small"
+    assert encoder_source(ARMS["base8-broad"])[0] == "jhu-clsp/mmBERT-base"

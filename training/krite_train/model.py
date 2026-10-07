@@ -1,10 +1,10 @@
 """Architecture-study models: the joint encoder (B) and the state-memory decision tower (D).
 
-Both start from the same mmBERT-small encoder. B reads question, options, and state in one sequence
-(Laya-style), so it re-encodes the state per question and depends on option order. D encodes the
-state alone (cacheable) and scores every candidate independently against it, so permuting candidates
-permutes energies and questions never see each other. Token layouts live here so training and the
-serving shim build byte-identical inputs.
+Both start from a pretrained mmBERT encoder (small unless the arm sets `encoder`). B reads question,
+options, and state in one sequence (Laya-style), so it re-encodes the state per question and depends
+on option order. D encodes the state alone (cacheable) and scores every candidate independently
+against it, so permuting candidates permutes energies and questions never see each other. Token
+layouts live here so training and the serving shim build byte-identical inputs.
 """
 
 from __future__ import annotations
@@ -23,6 +23,11 @@ MAX_STATE_TRAIN = 254  # content tokens per state during training
 MAX_CANDIDATE = 32  # tokens per D candidate, <bos>/<eos> included (also the tower's position table)
 MAX_OPTION = 14  # content tokens kept from "\n<name>[: <desc>]" before the instructions get the rest
 JOINT_HEAD = 128  # tokens before the state in a B sequence
+# Pretrained encoders by name; both ship the same tokenizer.json, so data tokenization is shared.
+ENCODERS = {
+    "small": (TOKENIZER_REPO, TOKENIZER_REVISION),
+    "base": ("jhu-clsp/mmBERT-base", "c5955035435e2bf121cde7f3c8863ef52ff35d82"),
+}
 
 ARMS = {
     "b": {"kind": "joint", "head_layers": 2},
@@ -54,6 +59,9 @@ ARMS = {
     # Stage C: two epochs on the winner so far (B1 and B2 rejected both loss terms).
     "late8-e2": {"kind": "late", "late_layers": 8, "mixture": "broad", "epochs": 2},
     "late8-e2-s14": {"kind": "late", "late_layers": 8, "mixture": "broad", "epochs": 2, "seed": 14},
+    # Encoder stage: the final recipe on mmBERT-base.
+    "base8-broad": {"kind": "late", "late_layers": 8, "mixture": "broad", "encoder": "base"},
+    "base8-broad-s14": {"kind": "late", "late_layers": 8, "mixture": "broad", "encoder": "base", "seed": 14},
 }
 MODEL_KEYS = ("layers", "option_encoder", "state_pool", "set_attention", "small_init")
 
@@ -330,10 +338,16 @@ def joint_ids(tok, qtype: str, instructions: str, options: list[str], state: lis
 # --- build, save, load -----------------------------------------------------------------------------
 
 
+def encoder_source(spec: dict) -> tuple[str, str]:
+    """(repo, revision) of the pretrained encoder an arm starts from."""
+    return ENCODERS[spec.get("encoder", "small")]
+
+
 def build(arm: str, encoder: nn.Module | None = None) -> nn.Module:
     spec = ARMS[arm]
     if encoder is None:
-        encoder = AutoModel.from_pretrained(TOKENIZER_REPO, revision=TOKENIZER_REVISION, dtype=torch.float32)
+        repo, rev = encoder_source(spec)
+        encoder = AutoModel.from_pretrained(repo, revision=rev, dtype=torch.float32)
     if spec["kind"] == "joint":
         return JointModel(encoder, spec["head_layers"])
     if spec["kind"] == "late":

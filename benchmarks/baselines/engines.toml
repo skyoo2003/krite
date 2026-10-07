@@ -370,3 +370,56 @@ model = "krite-0.15b-v1"
 backend = "candle-metal"
 precision = "fp32"
 start = "../../target/release/krite serve --port 8149 --model ../../training/ckpt/late8-broad/candle --state-cache-mb 0 --candidate-cache-mb 0"
+
+# Encoder stage (docs/training-data.md, "Encoder"): mmBERT-base. 8150 times a 1% pilot export before
+# full training; 8151/8152 are the torch arms; 8153–8155 the release candidate, its uncalibrated twin,
+# and both caches off.
+[krite-base-pilot]
+port = 8150
+venv = false
+model = "krite-0.3b-pilot"
+backend = "candle-metal"
+precision = "fp32"
+start = "../../target/release/krite serve --port 8150 --model ../../training/ckpt/pilot/base8-broad/candle"
+
+[arch-base8-broad]
+port = 8151
+venv = true
+venv_from = "arch-b"
+model = "arch-base8-broad"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/base8-broad --port 8151"
+
+[arch-base8-broad-s14]
+port = 8152
+venv = true
+venv_from = "arch-b"
+model = "arch-base8-broad-s14"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/base8-broad-s14 --port 8152"
+
+[krite-base]
+port = 8153
+venv = false
+model = "krite-0.3b-v0"
+backend = "candle-metal"
+precision = "fp32"
+start = "../../target/release/krite serve --port 8153 --model ../../training/ckpt/base8-broad/candle"
+
+[krite-base-raw]
+port = 8154
+venv = false
+model = "krite-0.3b-v0"
+backend = "candle-metal"
+precision = "fp32"
+start = "../../target/release/krite serve --port 8154 --model ../../training/ckpt/base8-broad/candle --raw"
+
+[krite-base-nocache]
+port = 8155
+venv = false
+model = "krite-0.3b-v0"
+backend = "candle-metal"
+precision = "fp32"
+start = "../../target/release/krite serve --port 8155 --model ../../training/ckpt/base8-broad/candle --state-cache-mb 0 --candidate-cache-mb 0"

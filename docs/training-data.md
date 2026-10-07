@@ -94,6 +94,48 @@ outside this recipe: a larger encoder (mmBERT-base, ~0.4B) or a revised accuracy
 Applied to today's `krite-0.15b-v0`, the gate passes every row except accuracy: ECE 0.058, warm
 7.8 ms, cold 91 ms, 183 decisions/s, flip rate 0, isolation 5.3e-7, cache 0.
 
+## Encoder
+
+The recipe search ended with every gate passing except accuracy (see Results). The rules above send
+the next step outside the recipe, and this section is that step: the final recipe (`late8`, `broad`,
+cross-entropy, one epoch, same learning rates and batch) on a larger encoder. Fixed before its pilot
+ran.
+
+| | mmBERT-small | mmBERT-base |
+|---|---|---|
+| Repo @ revision | `jhu-clsp/mmBERT-small` @ `abc32620` | `jhu-clsp/mmBERT-base` @ `c5955035` |
+| Hidden size, heads (head dim) | 384, 6 (64) | 768, 12 (64) |
+| Layers, intermediate size | 22, 1,152 | 22, 1,152 |
+| Parameters (embedding / rest) | ≈ 98M / 42M | ≈ 197M / 110M |
+| Tokenizer | identical `tokenizer.json` | identical `tokenizer.json` |
+| License | MIT | MIT |
+
+Layer count, attention pattern, RoPE, and tokenizer are shared, so `late8` keeps its split (14 lower,
+8 late layers), training data tokenizes identically, and the Candle runtime reads every size from
+`config.json`. Per token, base costs about 2.6× small's non-embedding compute.
+
+**Feasibility.** Latency depends on shapes and kernels, not on trained weights, so a 1% pilot of
+`base8-broad` (`krite_train.train --scale 0.01`) is exported, served by Candle as `krite-base-pilot`,
+and timed in the release gate's latency cells before any full training run. Every row must hold, or
+the encoder stage stops before training:
+
+| Check | Passes when |
+|---|---|
+| Candle numerics | the ignored `krite-candle` weight tests pass on the pilot export |
+| warm latency | HTTP p50, burst, 512-token state, 1 question, 4 options ≤ 10 ms |
+| cold latency | same cell, state cache miss ≤ 210 ms |
+| throughput | 30 questions / warm HTTP p50 at 512 tokens, 30 questions, 4 options ≥ 175 decisions/s |
+| training memory | pilot MPS peak ≤ 10 GiB; above it, the pilot reruns with two-step gradient accumulation (same examples per optimizer step) and must then fit |
+
+`krite_train.study feasibility` applies the three latency rows.
+
+**Encoder stage (E).** The stage rule above, unchanged: `broad` on small (`arch-late8-broad`, `-s14`)
+vs `broad` on base (`arch-base8-broad`, `-s14`). Nothing is retuned after a seed's result is seen.
+
+**Release.** If E adopts base, its seed-13 run ships as `krite-0.3b-v0` and goes through the same
+release gate. If E rejects base or the gate fails, `krite-0.15b-v1` stays the best model, and the next
+step is a revised accuracy target.
+
 ## Sources
 
 Every source is pinned to a Hugging Face revision. Rows whose state appears in any evaluation suite
@@ -814,3 +856,15 @@ The broad mixture closed most of xnli. Each later change (Brier, ordinal, two ep
 13 and lost at seed 14. The remaining gap sits in three held-out tasks: topic (agnews), passage QA
 (boolq), and fine-grained sentiment (sst5). As fixed in the rules above, the next step is outside
 this recipe: a larger encoder (mmBERT-base, ~0.4B) or a revised accuracy target.
+
+### Feasibility: mmBERT-base
+
+Not run yet.
+
+### Stage E: encoder
+
+Not run yet.
+
+### Release gate: mmBERT-base
+
+Not run yet.
