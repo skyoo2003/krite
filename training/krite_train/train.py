@@ -16,13 +16,13 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from krite_bench.data import SEED
+from krite_bench.data import ROOT, SEED
 from transformers import get_linear_schedule_with_warmup
 
 from . import data
 from . import model as m
 
-CKPT_DIR = Path(__file__).resolve().parents[1] / "ckpt"
+CKPT_DIR = ROOT / "training" / "ckpt"
 JOINT_LEN = 384  # B rows: JOINT_HEAD + MAX_STATE_TRAIN + <eos>, rounded up
 STATE_LEN = m.MAX_STATE_TRAIN + 2
 LR_ENCODER, LR_NEW = 5e-5, 3e-4

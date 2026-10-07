@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://krite.dev/protocol/v1/request.schema.json",
+  "title": "Krite Protocol v1 Request",
+  "type": "object",
+  "required": ["state", "questions"],
+  "additionalProperties": false,
+  "properties": {
+    "model": { "type": "string", "minLength": 1 },
+    "state": { "oneOf": [{ "type": "string" }, { "type": "object" }] },
+    "questions": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[A-Za-z0-9_.-]{1,64}$" },
+      "additionalProperties": { "$ref": "#/$defs/question" }
+    }
+  },
+  "$defs": {
+    "question": {
+      "oneOf": [
+        { "$ref": "#/$defs/choice" },
+        { "$ref": "#/$defs/score" },
+        { "$ref": "#/$defs/noul" }
+      ]
+    },
+    "description": { "type": ["string", "null"] },
+    "instructions": { "type": "string", "minLength": 1 },
+    "choice": {
+      "type": "object",
+      "required": ["type", "instructions", "criteria"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "choice" },
+        "instructions": { "$ref": "#/$defs/instructions" },
+        "criteria": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "minLength": 1 },
+          "additionalProperties": { "$ref": "#/$defs/description" }
+        }
+      }
+    },
+    "score": {
+      "type": "object",
+      "required": ["type", "instructions", "criteria"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "score" },
+        "instructions": { "$ref": "#/$defs/instructions" },
+        "criteria": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "noul": {
+      "type": "object",
+      "required": ["type", "instructions"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "noul" },
+        "instructions": { "$ref": "#/$defs/instructions" },
+        "criteria": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "true": { "$ref": "#/$defs/description" },
+            "false": { "$ref": "#/$defs/description" }
+          }
+        }
+      }
+    }
+  }
+}

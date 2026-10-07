@@ -2,6 +2,10 @@
 
 Cases are Protocol v1 requests plus gold labels. Dataset text is written only to the gitignored
 benchmarks/data/ directory; only ids and hashes leave it (manifest.json).
+
+Paths resolve against a workspace with the repository layout (benchmarks/data, benchmarks/results,
+benchmarks/baselines/engines.toml): $KRITE_ROOT, else the krite checkout this package sits in, else
+the current directory. The Protocol v1 schemas ship inside the package (copies of docs/protocol).
 """
 
 from __future__ import annotations
@@ -9,6 +13,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -17,9 +22,18 @@ import numpy as np
 import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
 
-ROOT = Path(__file__).resolve().parents[2]
+
+def find_root() -> Path:
+    """Workspace root: $KRITE_ROOT, else the krite checkout this module sits in, else the current directory."""
+    if env := os.environ.get("KRITE_ROOT"):
+        return Path(env).resolve()
+    repo = Path(__file__).resolve().parents[2]
+    return repo if (repo / "benchmarks" / "krite_bench").is_dir() else Path.cwd().resolve()
+
+
+ROOT = find_root()
 DATA_DIR = ROOT / "benchmarks" / "data"
-SCHEMA_DIR = ROOT / "docs" / "protocol"
+SCHEMA_DIR = Path(__file__).resolve().parent / "schemas"
 SEED = 13
 N_CASES = 400
 

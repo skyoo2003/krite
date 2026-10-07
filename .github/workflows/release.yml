@@ -1,0 +1,51 @@
+# Publishes krite-bench and krite-train to PyPI and the five crates to crates.io on a version tag.
+# Both registries use Trusted Publishing; reruns skip what is already published.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions: {}
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tag matches every manifest
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          for f in Cargo.toml benchmarks/pyproject.toml training/pyproject.toml; do
+            grep -qx "version = \"$v\"" "$f" || { echo "FAIL: $f is not $v" >&2; exit 1; }
+          done
+  pypi:
+    needs: version
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions: {contents: read, id-token: write}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      - run: uv build --no-sources benchmarks -o dist && uv build --no-sources training -o dist
+      - run: uv publish --trusted-publishing always --check-url https://pypi.org/simple/ dist/*
+  crates:
+    needs: version
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions: {contents: read, id-token: write}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - name: Publish in dependency order, skipping versions already on crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          for c in krite-core krite-runtime krite-candle krite-server krite-cli; do
+            if curl -sf -A "krite-release (github.com/skyoo2003/krite)" "https://crates.io/api/v1/crates/$c/$v" >/dev/null; then
+              echo "$c $v already published"
+            else
+              cargo publish -p "$c" --locked
+            fi
+          done

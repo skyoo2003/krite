@@ -27,12 +27,12 @@ from pathlib import Path
 
 import torch
 from huggingface_hub import hf_hub_download
-from krite_bench.data import TOKENIZER_REPO, TOKENIZER_REVISION
+from krite_bench.data import ROOT, TOKENIZER_REPO, TOKENIZER_REVISION
 from safetensors.torch import save_file
 
 from krite_train import model as m
 
-ENGINES = Path(__file__).resolve().parents[2] / "benchmarks/baselines/engines.toml"
+ENGINES = ROOT / "benchmarks" / "baselines" / "engines.toml"
 
 PROBE_CANDIDATES = [
     ("choice", "Which topic fits the text?", "sports", None),
