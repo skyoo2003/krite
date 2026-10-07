@@ -171,18 +171,59 @@ def targets(baselines: Path = BASELINES) -> dict[str, float]:
     return out
 
 
-def shortfall(out: Path, engine: str, tg: dict[str, float]) -> tuple[float, dict[str, float]]:
-    """(sum, per-suite) of max(0, target - value); an unmeasured suite raises, it is not a pass."""
+def values(out: Path, engine: str) -> dict[str, float]:
+    """Accuracy (choice, noul) or QWK (score) per suite; an unmeasured suite raises, it is not a pass."""
     q = _latest(_rows(out / "quality.jsonl"), "engine", "suite")
-    per = {}
+    vals = {}
     for s in suites():
         r = q.get((engine, s.id))
         if r is None:
             raise RuntimeError(f"{engine} {s.id}: no quality row")
         if r["error_rate"]:
             raise RuntimeError(f"{engine} {s.id}: error_rate {r['error_rate']}")
-        per[s.id] = max(0.0, tg[s.id] - _value(r, s.type))
+        vals[s.id] = _value(r, s.type)
+    return vals
+
+
+def shortfall(out: Path, engine: str, tg: dict[str, float]) -> tuple[float, dict[str, float]]:
+    """(sum, per-suite) of max(0, target - value)."""
+    per = {sid: max(0.0, tg[sid] - v) for sid, v in values(out, engine).items()}
     return sum(per.values()), per
+
+
+# Release accuracy (revised after the recipe search, docs/training-data.md "Targets"): whole engines,
+# not a per-suite best that no engine reaches. Laya's non-English rows come from its multilingual weights.
+REFERENCE_ENGINES = {"laya": ("laya", "laya-ml"), "cbjev": ("cbjev",)}
+
+
+def macro(vals: dict[str, float]) -> dict[str, float]:
+    """Mean over datasets of the per-dataset mean: accuracy over choice and noul, QWK over score."""
+    by: dict[tuple[bool, str], list[float]] = {}
+    for s in suites():
+        by.setdefault((s.type == "score", s.dataset), []).append(vals[s.id])
+    means = {k: sum(v) / len(v) for k, v in by.items()}
+    return {
+        "accuracy": _mean([m for (score, _), m in means.items() if not score]),
+        "qwk": _mean([m for (score, _), m in means.items() if score]),
+    }
+
+
+def reference(baselines: Path = BASELINES) -> dict:
+    """Per macro metric, the best whole reference engine minus MARGIN."""
+    q = _latest(_rows(baselines / "quality.jsonl"), "engine", "suite")
+    engines = {}
+    for name, rows in REFERENCE_ENGINES.items():
+        vals = {}
+        for s in suites():
+            r = next((q[(e, s.id)] for e in rows if (e, s.id) in q), None)
+            if r is None:
+                raise SystemExit(f"{name} {s.id}: no baseline quality row in {baselines}")
+            vals[s.id] = _value(r, s.type)
+        engines[name] = macro(vals)
+    return {
+        "engines": engines,
+        "targets": {m: max(e[m] for e in engines.values()) - MARGIN for m in ("accuracy", "qwk")},
+    }
 
 
 def _invariant_rows(out: Path, engines: list[str]) -> dict[str, dict]:
@@ -252,12 +293,15 @@ def feasibility(out: Path, engine: str) -> dict:
     return {"engine": engine, "gates": gates, "feasible": all(g["pass"] for g in gates.values())}
 
 
-def release(out: Path, engine: str, raw: str, nocache: str, tg: dict[str, float]) -> dict:
-    """Release gate. Missing data fails a gate, never passes it."""
-    total, per = shortfall(out, engine, tg)
+def release(out: Path, engine: str, raw: str, nocache: str, tg: dict[str, float], ref: dict) -> dict:
+    """Release gate. Missing data fails a gate, never passes it. The per-suite shortfall against the
+    best baseline per suite is reported, not gated."""
+    _, per = shortfall(out, engine, tg)
+    m = macro(values(out, engine))
     inv = invariants(out, engine)
     gates = {
-        "accuracy shortfall": _at_most(total, 0.0),
+        "accuracy (macro, choice and noul)": _at_least(m["accuracy"], ref["targets"]["accuracy"]),
+        "QWK (macro, score)": _at_least(m["qwk"], ref["targets"]["qwk"]),
         "ECE": _at_most(mean_scaled_ece(out, raw), RELEASE["ece"]),
         **latency_gates(out, engine),
         "I1 flip rate": _at_most(inv["flip_rate"], 0.0),
@@ -301,7 +345,9 @@ def main() -> None:
     elif a.cmd == "feasibility":
         print(json.dumps(feasibility(a.out, a.engine), indent=2))
     else:
-        print(json.dumps(release(a.out, a.engine, a.raw, a.nocache, targets(a.baselines)), indent=2))
+        ref = reference(a.baselines)
+        v = release(a.out, a.engine, a.raw, a.nocache, targets(a.baselines), ref)
+        print(json.dumps({**v, "reference": ref["engines"]}, indent=2))
 
 
 if __name__ == "__main__":
