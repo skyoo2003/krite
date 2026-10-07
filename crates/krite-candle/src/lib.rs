@@ -29,6 +29,9 @@ pub struct Manifest {
     pub max_option_tokens: usize,
     /// Calibration temperature per bucket; missing buckets use 1.0.
     pub temperatures: BTreeMap<String, f64>,
+    /// `YYYY-MM-DD` of the export; absent in exports that predate the field.
+    #[serde(default)]
+    pub release_date: String,
 }
 
 /// Metal when available unless `cpu` is set.
@@ -153,6 +156,9 @@ impl Backend for CandleBackend {
 
     fn model_id(&self) -> &str {
         &self.manifest.model_id
+    }
+    fn release_date(&self) -> &str {
+        &self.manifest.release_date
     }
 
     fn backend_name(&self) -> &str {

@@ -17,19 +17,24 @@ pub struct Request {
     pub questions: BTreeMap<String, Question>,
 }
 
+/// `instructions`, criterion descriptions, and score levels are content: a string, an object, or an
+/// array (`content_text`). JSON `null` and an absent field are both `None`.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 pub enum Question {
     Choice {
-        instructions: String,
-        criteria: BTreeMap<String, Option<String>>,
+        #[serde(default)]
+        instructions: Option<Value>,
+        criteria: BTreeMap<String, Option<Value>>,
     },
     Score {
-        instructions: String,
-        criteria: Vec<String>,
+        #[serde(default)]
+        instructions: Option<Value>,
+        criteria: Vec<Value>,
     },
     Noul {
-        instructions: String,
+        #[serde(default)]
+        instructions: Option<Value>,
         #[serde(default)]
         criteria: Option<NoulCriteria>,
     },
@@ -39,9 +44,9 @@ pub enum Question {
 #[serde(deny_unknown_fields)]
 pub struct NoulCriteria {
     #[serde(rename = "true", default)]
-    pub yes: Option<String>,
+    pub yes: Option<Value>,
     #[serde(rename = "false", default)]
-    pub no: Option<String>,
+    pub no: Option<Value>,
 }
 
 impl Question {
@@ -53,26 +58,60 @@ impl Question {
         }
     }
 
-    pub fn instructions(&self) -> &str {
+    fn instructions_value(&self) -> Option<&Value> {
         match self {
             Question::Choice { instructions, .. }
             | Question::Score { instructions, .. }
-            | Question::Noul { instructions, .. } => instructions,
+            | Question::Noul { instructions, .. } => instructions.as_ref(),
         }
     }
 
-    /// Candidates with optional descriptions: choice names (sorted), score levels in order,
-    /// noul `true` then `false`.
+    /// Instructions as model input; empty when absent.
+    pub fn instructions(&self) -> String {
+        self.instructions_value().and_then(content_text).unwrap_or_default()
+    }
+
+    /// Candidates with optional descriptions, as model input text: choice names (sorted), score levels
+    /// in order, noul `true` then `false`.
     pub fn candidates(&self) -> Vec<(String, Option<String>)> {
+        let text = |d: &Option<Value>| d.as_ref().and_then(content_text);
         match self {
-            Question::Choice { criteria, .. } => criteria.iter().map(|(n, d)| (n.clone(), d.clone())).collect(),
-            Question::Score { criteria, .. } => criteria.iter().map(|n| (n.clone(), None)).collect(),
+            Question::Choice { criteria, .. } => criteria.iter().map(|(n, d)| (n.clone(), text(d))).collect(),
+            Question::Score { criteria, .. } => {
+                criteria.iter().map(|l| (content_text(l).unwrap_or_default(), None)).collect()
+            }
             Question::Noul { criteria, .. } => {
                 let c = criteria.as_ref();
-                vec![("true".into(), c.and_then(|c| c.yes.clone())), ("false".into(), c.and_then(|c| c.no.clone()))]
+                vec![("true".into(), c.and_then(|c| text(&c.yes))), ("false".into(), c.and_then(|c| text(&c.no)))]
             }
         }
     }
+
+    /// Score levels as the request sent them (the response `legend` echoes them); empty for other types.
+    pub fn levels(&self) -> &[Value] {
+        match self {
+            Question::Score { criteria, .. } => criteria,
+            _ => &[],
+        }
+    }
+}
+
+/// Text the model reads for a JSON content value: strings as they are, objects and arrays as their
+/// RFC 8785 (JCS) canonical string. `None` for null, booleans, and numbers.
+pub fn content_text(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Object(_) | Value::Array(_) => {
+            let mut out = String::new();
+            jcs(v, &mut out);
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+fn is_content(v: Option<&Value>) -> bool {
+    v.is_none_or(|v| matches!(v, Value::String(_) | Value::Object(_) | Value::Array(_)))
 }
 
 /// Server defaults (`docs/protocol/v1.md` §4). Limits are configuration, not protocol.
@@ -178,25 +217,37 @@ pub fn validate(req: &Request, limits: &Limits) -> Result<(), ApiError> {
                 Some(format!("questions.{id}")),
             ));
         }
-        if q.instructions().is_empty() {
-            return Err(ApiError::invalid("`instructions` is empty", Some(format!("questions.{id}.instructions"))));
+        if !is_content(q.instructions_value()) {
+            let msg = "`instructions` must be a string, an object, an array, or null";
+            return Err(ApiError::invalid(msg, Some(format!("questions.{id}.instructions"))));
         }
         let param = Some(format!("questions.{id}.criteria"));
+        let not_content = "criterion descriptions must be strings, objects, arrays, or null";
         let k = match q {
             Question::Choice { criteria, .. } => {
                 if criteria.is_empty() || criteria.keys().any(String::is_empty) {
                     return Err(ApiError::invalid("choice criteria need at least one non-empty name", param));
                 }
+                if !criteria.values().all(|d| is_content(d.as_ref())) {
+                    return Err(ApiError::invalid(not_content, param));
+                }
                 criteria.len()
             }
             Question::Score { criteria, .. } => {
                 let mut seen = std::collections::BTreeSet::new();
-                if criteria.is_empty() || criteria.iter().any(|l| l.is_empty() || !seen.insert(l)) {
-                    return Err(ApiError::invalid("score criteria need unique non-empty levels", param));
+                let fresh = |l: &Value| content_text(l).is_some_and(|t| !t.is_empty() && seen.insert(t));
+                if criteria.is_empty() || !criteria.iter().all(fresh) {
+                    let msg = "score criteria need unique non-empty levels (strings, objects, or arrays)";
+                    return Err(ApiError::invalid(msg, param));
                 }
                 criteria.len()
             }
-            Question::Noul { .. } => 2,
+            Question::Noul { criteria, .. } => {
+                if !criteria.as_ref().is_none_or(|c| is_content(c.yes.as_ref()) && is_content(c.no.as_ref())) {
+                    return Err(ApiError::invalid(not_content, param));
+                }
+                2
+            }
         };
         if k > limits.max_options {
             return Err(ApiError::new(
@@ -209,17 +260,10 @@ pub fn validate(req: &Request, limits: &Limits) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// String states pass through; object states become their RFC 8785 (JCS) canonical string.
+/// String states pass through; object and array states become their RFC 8785 (JCS) canonical string.
 pub fn canonical_state(state: &Value) -> Result<String, ApiError> {
-    match state {
-        Value::String(s) => Ok(s.clone()),
-        Value::Object(_) => {
-            let mut out = String::new();
-            jcs(state, &mut out);
-            Ok(out)
-        }
-        _ => Err(ApiError::invalid("`state` must be a string or an object", Some("state".into()))),
-    }
+    content_text(state)
+        .ok_or_else(|| ApiError::invalid("`state` must be a string, an object, or an array", Some("state".into())))
 }
 
 /// RFC 8785: members sorted by UTF-16 code units, ECMAScript number formatting, JSON.stringify string escapes.
@@ -282,7 +326,7 @@ fn es_number(x: f64) -> String {
     if x < 0.0 { format!("-{body}") } else { body }
 }
 
-/// A JSON object serialized in the given order (score levels, legend "0".."K-1").
+/// A JSON object serialized in the given order (score keys "0".."K-1").
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ordered<V>(pub Vec<(String, V)>);
 
@@ -299,9 +343,21 @@ impl<V: Serialize> Serialize for Ordered<V> {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Answer {
-    Choice { choice: String, probabilities: Ordered<f64>, confidence: f64 },
-    Score { score: f64, legend: Ordered<String>, probabilities: Ordered<f64>, confidence: f64 },
-    Noul { noul: f64 },
+    Choice {
+        choice: String,
+        probabilities: Ordered<f64>,
+        confidence: f64,
+    },
+    /// `legend` and `probabilities` are both keyed by level index; `legend` echoes the request's levels.
+    Score {
+        score: f64,
+        legend: Ordered<Value>,
+        probabilities: Ordered<f64>,
+        confidence: f64,
+    },
+    Noul {
+        noul: f64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -343,7 +399,7 @@ mod tests {
 
     #[test]
     fn example_requests_are_valid() {
-        for name in ["choice.request.json", "multi.request.json"] {
+        for name in ["choice.request.json", "multi.request.json", "sdk.request.json"] {
             validate(&parse(&example(name)).unwrap(), &Limits::default()).unwrap();
         }
     }
@@ -381,7 +437,14 @@ mod tests {
 
     #[test]
     fn score_levels_unique_non_empty() {
-        for c in [json!(["a", "a"]), json!([""]), json!([])] {
+        let ok = json!({"type": "score", "criteria": ["a", {"x": 1}, ["a"]]});
+        let r = req(json!({"state": "s", "questions": {"q": ok}})).unwrap();
+        validate(&r, &Limits::default()).unwrap();
+        let names: Vec<String> = r.questions["q"].candidates().into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, ["a", r#"{"x":1}"#, r#"["a"]"#]);
+        assert_eq!(r.questions["q"].levels()[1], json!({"x": 1}));
+        // Levels are unique by model input text: the string `["a"]` and the array ["a"] collide.
+        for c in [json!(["a", "a"]), json!([r#"["a"]"#, ["a"]]), json!([""]), json!([]), json!([1]), json!([null])] {
             let q = json!({"type": "score", "instructions": "i", "criteria": c});
             assert_eq!(
                 check(json!({"state": "s", "questions": {"q": q}})).unwrap_err().kind,
@@ -402,17 +465,51 @@ mod tests {
         assert!(noul(None).is_ok());
         assert!(noul(Some(json!({}))).is_ok());
         assert!(noul(Some(json!({"true": "x"}))).is_ok());
+        assert!(noul(Some(json!({"true": {"k": 1}, "false": null}))).is_ok());
         assert!(noul(Some(json!({"maybe": 1}))).is_err());
+        assert!(noul(Some(json!({"true": 1}))).is_err());
     }
 
     #[test]
     fn empty_fields() {
         assert!(check(json!({"state": "s", "questions": {}})).is_err());
         assert!(check(json!({"state": "s", "model": "", "questions": {"q": choice(1)}})).is_err());
-        let q = json!({"type": "choice", "instructions": "", "criteria": {"a": null}});
-        let e = check(json!({"state": "s", "questions": {"q": q}})).unwrap_err();
-        assert_eq!(e.param.as_deref(), Some("questions.q.instructions"));
         assert!(check(json!({"state": "s", "questions": {"q": choice(0)}})).is_err());
+    }
+
+    #[test]
+    fn instructions_are_optional_content() {
+        let with = |i: Option<Value>| {
+            let mut q = json!({"type": "choice", "criteria": {"a": null}});
+            if let Some(i) = i {
+                q["instructions"] = i;
+            }
+            req(json!({"state": "s", "questions": {"q": q}}))
+                .and_then(|r| validate(&r, &Limits::default()).map(|()| r.questions["q"].instructions()))
+        };
+        assert_eq!(with(None).unwrap(), "");
+        assert_eq!(with(Some(Value::Null)).unwrap(), "");
+        assert_eq!(with(Some(json!(""))).unwrap(), "");
+        assert_eq!(with(Some(json!({"b": 1, "a": [2]}))).unwrap(), r#"{"a":[2],"b":1}"#);
+        assert_eq!(with(Some(json!(["x"]))).unwrap(), r#"["x"]"#);
+        for bad in [json!(5), json!(true)] {
+            assert_eq!(with(Some(bad)).unwrap_err().param.as_deref(), Some("questions.q.instructions"));
+        }
+    }
+
+    #[test]
+    fn criteria_are_content() {
+        let q = json!({"type": "choice", "criteria": {"a": {"y": 1, "x": 2}, "b": "d", "c": null}});
+        let r = req(json!({"state": "s", "questions": {"q": q}})).unwrap();
+        validate(&r, &Limits::default()).unwrap();
+        let want = [("a", Some(r#"{"x":2,"y":1}"#)), ("b", Some("d")), ("c", None)];
+        let got = r.questions["q"].candidates();
+        assert_eq!(got, want.map(|(n, d)| (n.to_string(), d.map(String::from))));
+        let q = json!({"type": "choice", "criteria": {"a": 1}});
+        assert_eq!(
+            check(json!({"state": "s", "questions": {"q": q}})).unwrap_err().param.as_deref(),
+            Some("questions.q.criteria")
+        );
     }
 
     #[test]
@@ -461,23 +558,20 @@ mod tests {
         assert_eq!(canonical_state(&a).unwrap(), r#"{"a":{"c":3,"d":2},"b":1}"#);
         assert_eq!(canonical_state(&a).unwrap(), canonical_state(&b).unwrap());
         assert_eq!(canonical_state(&json!("é")).unwrap(), "é");
-        for bad in [json!([1, 2]), json!(3)] {
+        assert_eq!(canonical_state(&json!([{"b": 1, "a": 2}, "x"])).unwrap(), r#"[{"a":2,"b":1},"x"]"#);
+        for bad in [json!(3), json!(null), json!(true)] {
             assert_eq!(canonical_state(&bad).unwrap_err().param.as_deref(), Some("state"));
         }
     }
 
     #[test]
     fn ordered_serialization_keeps_level_order() {
-        let legend: Vec<(String, String)> = (0..11).map(|i| (i.to_string(), format!("l{i}"))).collect();
-        let a = Answer::Score {
-            score: 0.0,
-            legend: Ordered(legend),
-            probabilities: Ordered(vec![("z".into(), 0.5), ("a".into(), 0.5)]),
-            confidence: 0.0,
-        };
+        let legend: Vec<(String, Value)> = (0..11).map(|i| (i.to_string(), json!(format!("l{i}")))).collect();
+        let probs: Vec<(String, f64)> = (0..11).map(|i| (i.to_string(), 1.0 / 11.0)).collect();
+        let a = Answer::Score { score: 0.0, legend: Ordered(legend), probabilities: Ordered(probs), confidence: 0.0 };
         let s = serde_json::to_string(&a).unwrap();
-        assert!(s.find("\"2\"").unwrap() < s.find("\"10\"").unwrap());
-        assert!(s.find("\"z\"").unwrap() < s.find("\"a\"").unwrap());
+        let (p2, p10) = (s.rfind("\"2\"").unwrap(), s.rfind("\"10\"").unwrap());
+        assert!(s.find("\"2\"").unwrap() < s.find("\"10\"").unwrap() && p2 < p10);
         assert!(s.starts_with(r#"{"type":"score""#));
     }
 

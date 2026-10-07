@@ -1,51 +1,22 @@
-//! HTTP-level checks of `POST /v1/systemone` against a weight-free backend.
+//! HTTP-level checks of `POST /v1/systemone` and `GET /v1/models` against a weight-free backend.
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
-use krite_runtime::{Backend, Candidate, Runtime};
+use krite_runtime::Runtime;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
-struct HashBackend;
+#[path = "support/hash.rs"]
+mod hash;
 
-impl Backend for HashBackend {
-    type State = Vec<u32>;
-    fn model_id(&self) -> &str {
-        "hash"
-    }
-    fn backend_name(&self) -> &str {
-        "none"
-    }
-    fn tokenizer_version(&self) -> &str {
-        "bytes"
-    }
-    fn tokenize(&self, text: &str, _special: bool) -> anyhow::Result<Vec<u32>> {
-        Ok(text.bytes().map(u32::from).collect())
-    }
-    fn encode(&mut self, ids: &[u32]) -> anyhow::Result<Vec<u32>> {
-        Ok(ids.to_vec())
-    }
-    fn state_bytes(s: &Vec<u32>) -> usize {
-        s.len() * 4
-    }
-    fn candidate_ids(
-        &self,
-        instructions: &str,
-        criteria: &[(String, Option<String>)],
-    ) -> anyhow::Result<Vec<Vec<u32>>> {
-        criteria
-            .iter()
-            .map(|(n, d)| self.tokenize(&format!("{instructions}\n{n}: {}", d.as_deref().unwrap_or("")), false))
-            .collect()
-    }
-    fn energies(&mut self, s: &Vec<u32>, cands: &[Candidate]) -> anyhow::Result<Vec<f32>> {
-        Ok(cands.iter().map(|c| Sha256::digest(format!("{s:?}|{}|{:?}", c.kind, c.ids))[0] as f32 / 64.0).collect())
-    }
-}
+use hash::HashBackend;
 
 async fn post(app: &axum::Router, body: impl Into<Body>) -> (StatusCode, axum::http::HeaderMap, Value) {
     let req = Request::post("/v1/systemone").header("content-type", "application/json").body(body.into()).unwrap();
+    send(app, req).await
+}
+
+async fn send(app: &axum::Router, req: Request<Body>) -> (StatusCode, axum::http::HeaderMap, Value) {
     let resp = app.clone().oneshot(req).await.unwrap();
     let (parts, body) = resp.into_parts();
     let bytes = to_bytes(body, usize::MAX).await.unwrap();
@@ -103,4 +74,31 @@ async fn protocol_errors() {
     let (status, _, body) =
         post(&app, json!({"model": "krite-0.15b-v1", "state": "s", "questions": q}).to_string()).await;
     unprocessable(status, &body, "unknown_model");
+}
+
+#[tokio::test]
+async fn lists_the_model_and_its_jev_alias() {
+    let app = krite_server::router(Runtime::new(HashBackend, 1 << 20));
+    let (status, h, body) = send(&app, Request::get("/v1/models").body(Body::empty()).unwrap()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(h["x-krite-request-id"], h["x-typesafe-request-id"]);
+    let names: Vec<&str> = body["models"].as_array().unwrap().iter().map(|m| m["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["hash", "jev-latest"]);
+    for m in body["models"].as_array().unwrap() {
+        assert!(m["description"].is_string() && m["release_date"].is_string(), "{m}");
+    }
+}
+
+#[tokio::test]
+async fn answers_the_sdk_request_shape() {
+    let app = krite_server::router(Runtime::new(HashBackend, 1 << 20));
+    let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/protocol/examples/sdk.request.json");
+    let (status, _, body) = post(&app, std::fs::read(p).unwrap()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["model"], "hash"); // the request asked for `jev-latest`
+    let u = &body["answers"]["urgency"];
+    assert_eq!(u["legend"]["1"], json!({"level": "Needs attention this week"}));
+    let keys = |v: &Value| v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    assert_eq!(keys(&u["probabilities"]), ["0", "1", "2"]);
+    assert_eq!(keys(&u["probabilities"]), keys(&u["legend"]));
 }

@@ -45,12 +45,24 @@ class Result:
         return self.error is None
 
 
+def name_scores(answers: dict) -> dict:
+    """Key score `probabilities` by level name instead of level index (Protocol v1 and Jev both send
+    index keys); the runners look probabilities up by candidate name. Runs after schema validation."""
+    out = {}
+    for qid, a in answers.items():
+        probs, legend = a.get("probabilities"), a.get("legend")
+        if a["type"] == "score" and set(probs) <= set(legend) and all(isinstance(v, str) for v in legend.values()):
+            a = {**a, "probabilities": {legend[k]: v for k, v in probs.items()}}
+        out[qid] = a
+    return out
+
+
 def from_jev(payload: dict) -> dict:
     """Map the Jev-style response dialect (seen in Kev and cbjev) onto Krite Protocol v1 before validation.
 
     Observed differences, all recorded as protocol compatibility findings in docs/baselines.md:
-    score `probabilities` keyed by level index instead of level name; nonzero `usage.output_tokens`;
-    missing `latency_ms`; extra top-level fields (e.g. `routing`) and noul `confidence`.
+    nonzero `usage.output_tokens`; missing `latency_ms`; extra top-level fields (e.g. `routing`) and
+    noul `confidence`.
     The returned `latency_ms` is 0 when the engine does not report one (no runtime layer).
     """
     if not isinstance(payload, dict):
@@ -60,9 +72,6 @@ def from_jev(payload: dict) -> dict:
     answers = {}
     for qid, answer in (payload.get("answers") or {}).items():
         a = dict(answer)
-        probs, legend = a.get("probabilities"), a.get("legend")
-        if a.get("type") == "score" and probs and legend and set(probs) <= set(legend):
-            a["probabilities"] = {legend[k]: v for k, v in probs.items()}
         if a.get("type") == "noul":
             a = {"type": "noul", "noul": a.get("noul")}
         answers[qid] = a
@@ -129,6 +138,7 @@ class Engine:
         problems = sorted(_validator().iter_errors(payload), key=str)
         if problems:
             return Result(200, http_ms, payload, headers=headers, error=f"schema: {problems[0].message[:300]}")
+        payload["answers"] = name_scores(payload["answers"])
         if set(payload["answers"]) != set(request["questions"]):
             return Result(200, http_ms, payload, headers=headers, error="answers do not cover every question id")
         mismatch = answer_mismatch(request["questions"], payload["answers"])

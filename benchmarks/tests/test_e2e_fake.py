@@ -118,7 +118,7 @@ def test_cold_requests_have_unique_states():
 
 
 def test_from_jev_maps_dialect_onto_protocol_v1():
-    from krite_bench.client import _validator, from_jev
+    from krite_bench.client import _validator, from_jev, name_scores
 
     jev = {
         "model": "m",
@@ -137,7 +137,11 @@ def test_from_jev_maps_dialect_onto_protocol_v1():
     }
     out = from_jev(jev)
     assert _validator().is_valid(out)
-    assert out["answers"]["s"]["probabilities"] == {"lo": 0.5, "hi": 0.5} and out["latency_ms"] == 0
+    assert out["latency_ms"] == 0
+    assert name_scores(out["answers"])["s"]["probabilities"] == {"lo": 0.5, "hi": 0.5}
+    # Score levels may be JSON; such answers keep index keys (the runners only send string levels).
+    obj = {"s": {**jev["answers"]["s"], "legend": {"0": {"x": 1}, "1": "hi"}}}
+    assert name_scores(obj)["s"]["probabilities"] == {"0": 0.5, "1": 0.5}
 
 
 def test_invariance_skips_identity_and_non_choice_suites(fake, tiny_suite, tmp_path):

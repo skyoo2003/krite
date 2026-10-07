@@ -302,8 +302,8 @@ tables above and are never mixed into them (spec §13).
 ## Protocol compatibility findings
 
 - Kev and cbjev, both described as Jev wire-compatible, key score `probabilities` by level index
-  (`"0"`, `"1"`, …) instead of level name. Krite Protocol v1 uses level names. If the official
-  SDK confirms the index form, v1 should adopt it.
+  (`"0"`, `"1"`, …) instead of level name. The official SDK (`typesafe-sdk` 0.7.2) confirms the index
+  form, and Protocol v1 adopted it; the harness maps index keys back to level names for every engine.
 - Kev returns nonzero `usage.output_tokens`; Krite fixes it at 0.
 - cbjev omits `latency_ms`, adds a top-level `routing` field, and adds `confidence` to noul answers.
 - The harness maps this dialect onto Protocol v1 before validation (`client.from_jev`); see

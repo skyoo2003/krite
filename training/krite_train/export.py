@@ -23,6 +23,7 @@ import shutil
 import sys
 import tomllib
 from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 
 import torch
@@ -137,6 +138,7 @@ def main() -> None:
             "max_candidate_tokens": m.MAX_CANDIDATE,
             "max_option_tokens": m.MAX_OPTION,
             "temperatures": temps,
+            "release_date": date.today().isoformat(),
             "source": {"ckpt": str(a.ckpt), "train_sha256": meta["train_sha256"], "seed": meta["seed"]},
         }
         (d / "krite.json").write_text(json.dumps(manifest, indent=2) + "\n")

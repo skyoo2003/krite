@@ -1,0 +1,23 @@
+{
+  "model": "jev-latest",
+  "state": [
+    { "from": "customer", "text": "Hi, I was charged twice for my March subscription." },
+    { "from": "agent", "text": "Sorry about that. Can you share the invoice number?" }
+  ],
+  "questions": {
+    "route": {
+      "type": "choice",
+      "criteria": {
+        "billing": { "covers": ["charges", "refunds", "invoices"] },
+        "technical": "Bugs, errors, or outages",
+        "other": null
+      }
+    },
+    "urgency": {
+      "type": "score",
+      "instructions": { "task": "Rate how urgent this conversation is for the customer." },
+      "criteria": ["Can wait", { "level": "Needs attention this week" }, "Needs attention today"]
+    },
+    "refund_requested": { "type": "noul", "instructions": null }
+  }
+}
