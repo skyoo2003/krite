@@ -11,7 +11,7 @@ use std::time::Instant;
 use anyhow::{Context, bail, ensure};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use krite_runtime::{Backend, Candidate, StateCache};
+use krite_runtime::{Backend, Calibrator, Candidate, Runtime, StateCache};
 use late::{LateModel, LateState};
 use modernbert::Config;
 use serde::Deserialize;
@@ -37,6 +37,25 @@ pub struct Manifest {
 /// Metal when available unless `cpu` is set.
 pub fn device(cpu: bool) -> anyhow::Result<Device> {
     if !cpu && candle_core::utils::metal_is_available() { Ok(Device::new_metal(0)?) } else { Ok(Device::Cpu) }
+}
+
+/// The runtime `krite serve` runs: the model directory on Metal (unless `cpu`) or CPU, Metal pipelines
+/// compiled, and the shipped temperatures applied unless `raw`. A cache budget of 0 turns that cache off.
+pub fn serving_runtime(
+    dir: &Path,
+    cpu: bool,
+    state_cache_bytes: usize,
+    candidate_cache_bytes: usize,
+    raw: bool,
+) -> anyhow::Result<Runtime<CandleBackend>> {
+    let mut backend = CandleBackend::load(dir, device(cpu)?, candidate_cache_bytes)?;
+    backend.warmup()?;
+    let calibrator = if raw {
+        Calibrator::identity()
+    } else {
+        Calibrator::from_temperatures(backend.temperatures().iter().map(|(k, v)| (k.as_str(), *v)))?
+    };
+    Ok(Runtime::new(backend, state_cache_bytes).with_calibrator(calibrator))
 }
 
 /// Token ids for model-layer timing; keep in sync with `benchmarks/baselines/encoder_torch.py`.

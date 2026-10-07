@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use krite_candle::{CandleBackend, bench_candidates, bench_ids, device};
-use krite_runtime::{Backend, Calibrator, Runtime};
+use krite_candle::{CandleBackend, bench_candidates, bench_ids, device, serving_runtime};
+use krite_runtime::Backend;
 use serde_json::json;
 
 /// 15 minutes: above this, model-layer cells drop to 50 measured runs (benchmark-spec §12 `truncated`).
@@ -174,14 +174,8 @@ fn bench_decide(a: &BenchDecide) -> anyhow::Result<()> {
 fn main() -> anyhow::Result<()> {
     match Cli::parse().cmd {
         Cmd::Serve { model, port, device, state_cache_mb, candidate_cache_mb, raw } => {
-            let mut backend = load(&model, device, candidate_cache_mb)?;
-            backend.warmup()?;
-            let calibrator = if raw {
-                Calibrator::identity()
-            } else {
-                Calibrator::from_temperatures(backend.temperatures().iter().map(|(k, v)| (k.as_str(), *v)))?
-            };
-            let rt = Runtime::new(backend, state_cache_mb << 20).with_calibrator(calibrator);
+            let cpu = matches!(device, Dev::Cpu);
+            let rt = serving_runtime(&model, cpu, state_cache_mb << 20, candidate_cache_mb << 20, raw)?;
             tokio::runtime::Runtime::new()?.block_on(krite_server::serve(rt, port))
         }
         Cmd::BenchEncoder { model, tokens, warmup, n, device } => bench_encoder(&model, &tokens, warmup, n, device),
