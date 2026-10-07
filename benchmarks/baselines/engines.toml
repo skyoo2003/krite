@@ -423,3 +423,21 @@ model = "krite-0.3b-v0"
 backend = "candle-metal"
 precision = "fp32"
 start = "../../target/release/krite serve --port 8155 --model ../../training/ckpt/base8-broad/candle --state-cache-mb 0 --candidate-cache-mb 0"
+
+# Optimized runtime (docs/runtime.md, "Optimization rules"): the krite-v1 export served by the optimized
+# binary; the krite-v1 rows stay those of the earlier binary. 8156 with caches, 8157 with both caches off.
+[krite-v1-fast]
+port = 8156
+venv = false
+model = "krite-0.15b-v1"
+backend = "candle-metal"
+precision = "fp32"
+start = "../../target/release/krite serve --port 8156 --model ../../training/ckpt/late8-broad/candle"
+
+[krite-v1-fast-nocache]
+port = 8157
+venv = false
+model = "krite-0.15b-v1"
+backend = "candle-metal"
+precision = "fp32"
+start = "../../target/release/krite serve --port 8157 --model ../../training/ckpt/late8-broad/candle --state-cache-mb 0 --candidate-cache-mb 0"

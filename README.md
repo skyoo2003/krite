@@ -25,6 +25,15 @@ curl -s http://127.0.0.1:8110/v1/systemone -H 'content-type: application/json' -
                  "technical": "bugs, login, app errors"}}}}'
 ```
 
+From Python, in process and without a server (`pip install krite`), the same runtime answers the same request:
+
+```python
+import krite
+
+k = krite.Krite("krite-0.15b-v1")
+print(k.decide({"state": "I was charged twice.", "questions": {"refund": {"type": "noul"}}})["answers"])
+```
+
 ## Packages
 
 | Package | Registry | Content |
@@ -33,7 +42,8 @@ curl -s http://127.0.0.1:8110/v1/systemone -H 'content-type: application/json' -
 | `krite-runtime` | crates.io | `Backend` trait, request pipeline, state cache, per-bucket calibration. |
 | `krite-candle` | crates.io | `CandleBackend`: the late-interaction decision tower on mmBERT, Metal or CPU. |
 | `krite-server` | crates.io | axum router for `POST /v1/systemone`. |
-| `krite-cli` | crates.io | The `krite` binary: `krite serve`, `krite bench-encoder`. |
+| `krite-cli` | crates.io | The `krite` binary: `krite serve`, `krite bench-encoder`, `krite bench-decide`. |
+| `krite` | PyPI | Python binding: the runtime in process, `Krite(model).decide(request)`. |
 | `krite-bench` | PyPI | Benchmark harness for any `/v1/systemone` engine. |
 | `krite-train` | PyPI | Training, export, and study code (torch). |
 | `krite-0.15b-v1` | Hugging Face | Model directory for `krite serve --model`. |

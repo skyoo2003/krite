@@ -11,7 +11,7 @@ use std::time::Instant;
 use anyhow::{Context, bail, ensure};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use krite_runtime::{Backend, Candidate, StateCache};
+use krite_runtime::{Backend, Calibrator, Candidate, Runtime, StateCache};
 use late::{LateModel, LateState};
 use modernbert::Config;
 use serde::Deserialize;
@@ -39,12 +39,43 @@ pub fn device(cpu: bool) -> anyhow::Result<Device> {
     if !cpu && candle_core::utils::metal_is_available() { Ok(Device::new_metal(0)?) } else { Ok(Device::Cpu) }
 }
 
+/// The runtime `krite serve` runs: the model directory on Metal (unless `cpu`) or CPU, Metal pipelines
+/// compiled, and the shipped temperatures applied unless `raw`. A cache budget of 0 turns that cache off.
+pub fn serving_runtime(
+    dir: &Path,
+    cpu: bool,
+    state_cache_bytes: usize,
+    candidate_cache_bytes: usize,
+    raw: bool,
+) -> anyhow::Result<Runtime<CandleBackend>> {
+    let mut backend = CandleBackend::load(dir, device(cpu)?, candidate_cache_bytes)?;
+    backend.warmup()?;
+    let calibrator = if raw {
+        Calibrator::identity()
+    } else {
+        Calibrator::from_temperatures(backend.temperatures().iter().map(|(k, v)| (k.as_str(), *v)))?
+    };
+    Ok(Runtime::new(backend, state_cache_bytes).with_calibrator(calibrator))
+}
+
 /// Token ids for model-layer timing; keep in sync with `benchmarks/baselines/encoder_torch.py`.
 pub fn bench_ids(n: usize) -> Vec<u32> {
     let mut v = vec![2u32];
     v.extend((0..n.saturating_sub(2)).map(|i| ((1000 + 7919 * i) % 256_000) as u32));
     v.push(1);
     v
+}
+
+/// Choice candidates for `questions` questions of `options` options each, for model-layer timing; keep
+/// in sync with `latency_request` in `benchmarks/krite_bench/data.py`.
+pub fn bench_candidates(b: &CandleBackend, questions: usize, options: usize) -> anyhow::Result<Vec<Candidate>> {
+    let criteria: Vec<(String, Option<String>)> = (0..options).map(|j| (format!("option {j}"), None)).collect();
+    let mut cands = Vec::new();
+    for i in 0..questions {
+        let ins = format!("Question {i}: which option fits the text best?");
+        cands.extend(b.candidate_ids(&ins, &criteria)?.into_iter().map(|ids| Candidate { kind: "choice", ids }));
+    }
+    Ok(cands)
 }
 
 /// `<bos> instructions option <eos>` within `max` ids; the option keeps up to `max_option` ids first.

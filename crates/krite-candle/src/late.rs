@@ -32,8 +32,7 @@ fn batches(lens: &[usize], budget: usize) -> Vec<Vec<usize>> {
     batches
 }
 
-/// State memory: per top layer, the state's rotated keys transposed (heads, head_dim, S) and its values
-/// (heads, S, head_dim). It never sees questions, so it is cached across requests.
+/// State memory: per top layer, the state's rotated keys and its values, (heads, S, head_dim) each. It never sees questions, so it is cached across requests.
 #[derive(Clone)]
 pub struct LateState {
     kv: Vec<(Tensor, Tensor)>,
@@ -55,34 +54,36 @@ pub struct LateModel {
     fc2: Linear,
 }
 
-/// Additive key-padding mask (n, 1, 1, t): 0 on real tokens, -inf on padding.
+/// Additive key-padding mask (1, n, 1, t), broadcastable to head-major (heads, n, t, t): 0 on real tokens,
+/// -inf on padding.
 fn key_padding(lens: &[usize], t: usize, dtype: DType, dev: &Device) -> Result<Tensor> {
     let v: Vec<f32> =
         lens.iter().flat_map(|&l| (0..t).map(move |j| if j < l { 0.0 } else { f32::NEG_INFINITY })).collect();
-    Tensor::from_vec(v, (lens.len(), 1, 1, t), dev)?.to_dtype(dtype)
+    Tensor::from_vec(v, (1, lens.len(), 1, t), dev)?.to_dtype(dtype)
 }
 
 /// Softmax over [state keys ; own keys] for every candidate, without copying the state per candidate.
-/// q, k, v: (H, n, t, dh); kt: (H, dh, S); sv: (H, S, dh); pad: additive, broadcastable to (H, n, t, t).
-/// Returns (H, n, t, dh).
+/// q, k, v: (H, n, t, dh); sk, sv: (H, S, dh); pad: additive (H, n, t, t), contiguous. Returns (H, n, t, dh).
 ///
-/// Each score block gets its own fused softmax; the two are then weighted by exp(lse_block - lse).
-/// Concatenating and slicing, or broadcasting over the (H, n, t, S) block, runs Candle's strided Metal
-/// kernels, which are about 15× slower than the contiguous ones.
+/// Each score block gets its own fused softmax; the two are then weighted by exp(lse_block - lse). Every
+/// op runs a contiguous Metal kernel: the matmuls read transposed keys in place, and the weighting is a
+/// batched (1 × 1)·(1 × dh) matmul. Concatenating and slicing, copying a transpose, or broadcasting (an
+/// add over the head axis, a multiply by the (H, n, t, 1) weights) runs Candle's strided kernels, which
+/// are about 9–15× slower.
 pub(crate) fn late_attention(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
-    kt: &Tensor,
+    sk: &Tensor,
     sv: &Tensor,
     pad: &Tensor,
     scale: f64,
 ) -> Result<Tensor> {
     let (h, n, t, dh) = q.dims4()?;
-    let s = kt.dim(2)?;
+    let s = sk.dim(1)?;
     let q = (q * scale)?;
-    let state = q.reshape((h, n * t, dh))?.matmul(kt)?.reshape((h, n, t, s))?;
-    let own = q.matmul(&k.t()?.contiguous()?)?.broadcast_add(pad)?;
+    let state = q.reshape((h, n * t, dh))?.matmul(&sk.t()?)?.reshape((h, n, t, s))?;
+    let own = (q.matmul(&k.t()?)? + pad)?;
     // log Σ exp(x) = max x - log max softmax(x); max softmax(x) ≥ 1/len, so the log never underflows.
     let softmax_lse = |x: &Tensor| -> Result<(Tensor, Tensor)> {
         let p = softmax_last_dim(x)?;
@@ -92,9 +93,10 @@ pub(crate) fn late_attention(
     let ((ps, ls), (po, lo)) = (softmax_lse(&state)?, softmax_lse(&own)?);
     let m = ls.maximum(&lo)?;
     let lse = (&m + ((&ls - &m)?.exp()? + (&lo - &m)?.exp()?)?.log()?)?;
-    let from_state = ps.reshape((h, n * t, s))?.matmul(sv)?.reshape((h, n, t, dh))?;
-    let from_own = po.matmul(v)?;
-    from_state.broadcast_mul(&(ls - &lse)?.exp()?)? + from_own.broadcast_mul(&(lo - &lse)?.exp()?)?
+    let rows = h * n * t;
+    let weigh = |x: Tensor, l: &Tensor| (l - &lse)?.exp()?.reshape((rows, 1, 1))?.matmul(&x.reshape((rows, 1, dh))?);
+    let (from_state, from_own) = (ps.reshape((h, n * t, s))?.matmul(sv)?, po.matmul(v)?);
+    (weigh(from_state, &ls)? + weigh(from_own, &lo)?)?.reshape((h, n, t, dh))
 }
 
 impl LateModel {
@@ -130,7 +132,7 @@ impl LateModel {
         for l in self.split..self.bert.num_layers() {
             let layer = self.bert.layer(l);
             let (_, k, v) = layer.attn.qkv(&layer.attn_input(&h)?, 0)?;
-            kv.push((k.squeeze(0)?.t()?.contiguous()?, v.squeeze(0)?));
+            kv.push((k.squeeze(1)?, v.squeeze(1)?));
             if l + 1 < self.bert.num_layers() {
                 h = self.bert.run(&h, l..l + 1, None, Some(&band))?;
             }
@@ -162,7 +164,7 @@ impl LateModel {
             cands.iter().flat_map(|c| c.iter().copied().chain(std::iter::repeat_n(0, t - c.len()))).collect();
         let ids = Tensor::from_vec(ids, (cands.len(), t), dev)?;
         let x = self.bert.embed(&ids)?;
-        let pad = key_padding(&lens, t, x.dtype(), dev)?;
+        let pad = self.bert.mask(&key_padding(&lens, t, x.dtype(), dev)?, cands.len(), t)?;
         let x = self.bert.run(&x, 0..self.split, Some(&pad), Some(&pad))?;
         lens.iter().enumerate().map(|(i, &l)| x.get(i)?.narrow(0, 0, l)?.force_contiguous()).collect()
     }
@@ -192,15 +194,17 @@ impl LateModel {
         let mut x = Tensor::stack(&rows, 0)?; // (n, t, d)
         let (dev, dtype, d) = (x.device().clone(), x.dtype(), x.dim(2)?);
         x = x.reshape((n * t, d))?;
-        let pad = key_padding(&lens, t, dtype, &dev)?.reshape((1, n, 1, t))?;
-        for (i, (kt, sv)) in state.kv.iter().enumerate() {
+        // Expanded once per chunk: adding a broadcast mask in every layer would run the strided kernel.
+        let heads = self.bert.layer(self.split).attn.heads;
+        let pad = key_padding(&lens, t, dtype, &dev)?.broadcast_as((heads, n, t, t))?.contiguous()?;
+        for (i, (sk, sv)) in state.kv.iter().enumerate() {
             let layer = self.bert.layer(self.split + i);
             let a = &layer.attn;
             let (q, k, v) = a.project(&layer.attn_input(&x)?.unsqueeze(0)?)?; // (H, n·t, dh)
             let split = |x: Tensor| x.reshape((a.heads, n, t, a.head_dim)); // (H, n, t, dh)
             let (q, k) = (a.rope(&split(q)?, state.len)?, a.rope(&split(k)?, state.len)?);
-            let o = late_attention(&q, &k, &split(v)?, kt, sv, &pad, (a.head_dim as f64).powf(-0.5))?;
-            x = (&x + o.permute((1, 2, 0, 3))?.reshape((n * t, d))?.apply(&a.proj)?)?;
+            let o = late_attention(&q, &k, &split(v)?, sk, sv, &pad, (a.head_dim as f64).powf(-0.5))?;
+            x = (&x + a.out(&o.reshape((a.heads, n * t, a.head_dim))?)?)?;
             x = (&x + x.apply(&layer.mlp_norm)?.apply(&layer.mlp)?)?;
         }
         let x = x.apply(self.bert.final_norm())?.reshape((n, t, d))?;
@@ -243,9 +247,8 @@ mod tests {
         let (q, k, v, sk, sv) =
             (r(&[h, n, t, dh]), r(&[h, n, t, dh]), r(&[h, n, t, dh]), r(&[h, s, dh]), r(&[h, s, dh]));
         let lens = [4, 2, 3];
-        let pad = key_padding(&lens, t, DType::F32, &dev).unwrap().reshape((1, n, 1, t)).unwrap();
-        let kt = sk.t().unwrap().contiguous().unwrap();
-        let got = late_attention(&q, &k, &v, &kt, &sv, &pad, 0.3).unwrap();
+        let pad = key_padding(&lens, t, DType::F32, &dev).unwrap().broadcast_as((h, n, t, t)).unwrap();
+        let got = late_attention(&q, &k, &v, &sk, &sv, &pad.contiguous().unwrap(), 0.3).unwrap();
         for (c, &len) in lens.iter().enumerate() {
             let (qc, kc, vc) = (q.narrow(1, c, 1).unwrap(), k.narrow(1, c, 1).unwrap(), v.narrow(1, c, 1).unwrap());
             let keys = Tensor::cat(&[&sk, &kc.squeeze(1).unwrap().narrow(1, 0, len).unwrap()], 1).unwrap();

@@ -1,5 +1,6 @@
 # Runs the repository checks (scripts/check-*.sh) on pushes to main and on pull requests.
-# compat drives a weight-free server through the official Jev SDK (compat/jev).
+# compat drives a weight-free server through the official Jev SDK (compat/jev). binding builds the PyO3
+# extension (python/) and tests it against a tiny random model.
 # macOS arm64, the development platform: the Metal features compile; tests needing a GPU or model
 # weights stay #[ignore]d. The network-marked bench tests download the mmBERT tokenizer.
 name: ci
@@ -38,3 +39,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: astral-sh/setup-uv@v10.2.0
       - run: scripts/check-compat.sh
+  binding:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: scripts/check-python.sh
