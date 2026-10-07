@@ -24,7 +24,7 @@ jobs:
     permissions: {contents: read, id-token: write}
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0
       - run: uv build --no-sources benchmarks -o dist && uv build --no-sources training -o dist
       - run: uv publish --trusted-publishing always --check-url https://pypi.org/simple/ dist/*
   crates:
