@@ -55,7 +55,7 @@ Internally, all three primitives are "a distribution over a runtime-defined cand
 |---|---|---|
 | choice | keys of the criteria object (K ≥ 1; server default limit 255) | `choice` = argmax name, `probabilities`, `confidence` |
 | noul | `{true, false}` (K = 2) | `noul` = P(true) |
-| score | levels 0..K−1 in criteria array order (K ≥ 1; server default limit 255) | `score` = Σ i·p_i, `legend` `{"0": level_0, …}`, `probabilities`, `confidence` |
+| score | levels 0..K−1 in criteria array order (K ≥ 1; server default limit 255) | `score` = Σ i·p_i, `legend` `{"0": level_0, …}`, `probabilities` keyed like `legend`, `confidence` |
 
 Argmax ties are broken by **ascending Unicode codepoint order of the names**, not by criteria input order. This keeps the result order-invariant.
 

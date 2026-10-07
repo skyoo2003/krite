@@ -7,7 +7,7 @@ pub mod calibrate;
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use krite_core::{Answer, ApiError, ErrorType, Limits, Ordered, Request, Response, Usage};
+use krite_core::{Answer, ApiError, ErrorType, Limits, Ordered, Question, Request, Response, Usage};
 use sha2::{Digest, Sha256};
 
 pub use cache::StateCache;
@@ -21,11 +21,18 @@ pub struct Candidate {
     pub ids: Vec<u32>,
 }
 
+/// Model alias the official Jev SDK sends by default; it resolves to the served model.
+pub const JEV_ALIAS: &str = "jev-latest";
+
 /// A model backend. The state encoder never sees questions, so its output can be cached across requests.
 pub trait Backend: Send + 'static {
     type State: Clone + Send;
 
     fn model_id(&self) -> &str;
+    /// `YYYY-MM-DD` the model was exported; empty when unknown.
+    fn release_date(&self) -> &str {
+        ""
+    }
     /// Spec §1 backend value, e.g. `candle-metal`.
     fn backend_name(&self) -> &str;
     /// Part of the state cache key, so a tokenizer change invalidates cached states.
@@ -99,21 +106,23 @@ pub fn softmax(e: &[f32], temperature: f64) -> Vec<f64> {
     exp.iter().map(|x| x / sum).collect()
 }
 
-fn answer(kind: &str, names: Vec<String>, p: Vec<f64>) -> Answer {
-    match kind {
+fn answer(q: &Question, p: Vec<f64>) -> Answer {
+    let names = q.candidates().into_iter().map(|(n, _)| n);
+    match q.kind() {
         "noul" => Answer::Noul { noul: p[0] },
         "choice" => {
             // Ties go to the smallest name in codepoint order (String order is UTF-8 byte order).
             let top = p.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let names: Vec<String> = names.collect();
             let choice = names.iter().zip(&p).filter(|(_, x)| **x == top).map(|(n, _)| n).min().unwrap().clone();
             let confidence = confidence(&p);
             Answer::Choice { choice, probabilities: Ordered(names.into_iter().zip(p).collect()), confidence }
         }
         _ => Answer::Score {
             score: p.iter().enumerate().map(|(i, x)| i as f64 * x).sum(),
-            legend: Ordered(names.iter().enumerate().map(|(i, n)| (i.to_string(), n.clone())).collect()),
+            legend: Ordered(q.levels().iter().enumerate().map(|(i, l)| (i.to_string(), l.clone())).collect()),
             confidence: confidence(&p),
-            probabilities: Ordered(names.into_iter().zip(p).collect()),
+            probabilities: Ordered(p.into_iter().enumerate().map(|(i, x)| (i.to_string(), x)).collect()),
         },
     }
 }
@@ -158,7 +167,7 @@ impl<B: Backend> Runtime<B> {
 
     pub fn decide(&mut self, req: &Request) -> Result<Decision, ApiError> {
         krite_core::validate(req, &self.limits)?;
-        if let Some(m) = req.model.as_deref().filter(|m| *m != self.backend.model_id()) {
+        if let Some(m) = req.model.as_deref().filter(|m| *m != self.backend.model_id() && *m != JEV_ALIAS) {
             let msg = format!("unknown model {m:?}; this server runs {:?}", self.backend.model_id());
             return Err(ApiError::new(ErrorType::UnknownModel, msg, Some("model".into())));
         }
@@ -180,7 +189,7 @@ impl<B: Backend> Runtime<B> {
             let cands: Vec<(String, Option<String>)> =
                 q.candidates().into_iter().map(|(n, d)| (n, d.filter(|d| !d.is_empty()))).collect();
             spans.push((texts.len(), cands.len()));
-            let ids = self.backend.candidate_ids(q.instructions(), &cands).map_err(internal)?;
+            let ids = self.backend.candidate_ids(&q.instructions(), &cands).map_err(internal)?;
             if ids.len() != cands.len() {
                 return Err(ApiError::internal(format!("{} inputs for {} criteria", ids.len(), cands.len())));
             }
@@ -220,10 +229,9 @@ impl<B: Backend> Runtime<B> {
         let t = Instant::now();
         let mut answers = BTreeMap::new();
         for ((id, q), (start, k)) in req.questions.iter().zip(spans) {
-            let names = q.candidates().into_iter().map(|(n, _)| n).collect();
             let e = &energies[start..start + k];
             let p = if k == 1 { vec![1.0] } else { softmax(e, self.calibrator.temperature(bucket(q.kind(), k))) };
-            answers.insert(id.clone(), answer(q.kind(), names, p));
+            answers.insert(id.clone(), answer(q, p));
         }
         timing.calibrate_ms = ms(t);
 
@@ -318,16 +326,22 @@ mod tests {
     fn answer_math() {
         let p = softmax(&[0.0, 0.0], 1.0);
         assert_eq!(p, vec![0.5, 0.5]);
-        let Answer::Choice { choice, confidence, .. } = answer("choice", vec!["b".into(), "a".into()], p) else {
+        let q = |v: Value| serde_json::from_value::<Question>(v).unwrap();
+        // Candidates come sorted by name, so "a" comes first and wins the tie either way.
+        let Answer::Choice { choice, confidence, .. } =
+            answer(&q(json!({"type": "choice", "criteria": {"b": null, "a": null}})), p)
+        else {
             panic!()
         };
         assert_eq!((choice.as_str(), confidence), ("a", 0.0));
-        let Answer::Score { score, legend, .. } = answer("score", vec!["l".into(), "h".into()], vec![0.25, 0.75])
+        let Answer::Score { score, legend, probabilities, .. } =
+            answer(&q(json!({"type": "score", "criteria": ["l", {"h": 1}]})), vec![0.25, 0.75])
         else {
             panic!()
         };
         assert_eq!(score, 0.75);
-        assert_eq!(legend.0[1], ("1".into(), "h".into()));
+        assert_eq!(legend.0[1], ("1".into(), json!({"h": 1})));
+        assert_eq!(probabilities.0, [("0".to_string(), 0.25), ("1".to_string(), 0.75)]);
         assert!((softmax(&[1.0, 0.0], 2.0)[0] - 1.0 / (1.0 + (-0.5f64).exp())).abs() < 1e-12);
     }
 
@@ -353,8 +367,8 @@ mod tests {
             assert!((s - 1.0).abs() < 1e-9);
         }
         let u = &b["answers"]["urgency"];
-        let p: Vec<f64> =
-            ["low", "mid", "high", "max"].iter().map(|n| u["probabilities"][n].as_f64().unwrap()).collect();
+        let p: Vec<f64> = (0..4).map(|i| u["probabilities"][i.to_string()].as_f64().unwrap()).collect();
+        assert_eq!(u["legend"], json!({"0": "low", "1": "mid", "2": "high", "3": "max"}));
         assert!(
             (u["score"].as_f64().unwrap() - p.iter().enumerate().map(|(i, x)| i as f64 * x).sum::<f64>()).abs() < 1e-12
         );
@@ -392,6 +406,8 @@ mod tests {
         let e = decide(&mut rt(), json!({"model": "other", "state": "s", "questions": {"q": route()}})).unwrap_err();
         assert_eq!((e.kind, e.param.as_deref()), (ErrorType::UnknownModel, Some("model")));
         assert!(decide(&mut rt(), json!({"model": "hash", "state": "s", "questions": {"q": route()}})).is_ok());
+        let d = decide(&mut rt(), json!({"model": JEV_ALIAS, "state": "s", "questions": {"q": route()}})).unwrap();
+        assert_eq!(d.response.model, "hash");
         let mut r = rt().with_limits(Limits { max_state_tokens: 8, ..Limits::default() });
         let e = decide(&mut r, json!({"state": "longer than eight", "questions": {"q": route()}})).unwrap_err();
         assert_eq!((e.kind, e.param.as_deref()), (ErrorType::StateTooLong, Some("state")));

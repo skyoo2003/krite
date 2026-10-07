@@ -59,9 +59,12 @@
           "type": "object",
           "minProperties": 1,
           "propertyNames": { "pattern": "^[0-9]+$" },
-          "additionalProperties": { "type": "string", "minLength": 1 }
+          "additionalProperties": { "type": ["string", "object", "array"], "minLength": 1 }
         },
-        "probabilities": { "$ref": "#/$defs/probabilities" },
+        "probabilities": {
+          "$ref": "#/$defs/probabilities",
+          "propertyNames": { "pattern": "^[0-9]+$" }
+        },
         "confidence": { "$ref": "#/$defs/prob" }
       }
     },

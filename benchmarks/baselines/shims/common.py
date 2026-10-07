@@ -66,7 +66,7 @@ def build_answer(q: dict, probs: dict[str, float]) -> dict:
         "type": "score",
         "score": sum(i * x for i, x in enumerate(p)),
         "legend": {str(i): n for i, n in enumerate(names)},
-        "probabilities": dict(zip(names, p, strict=True)),
+        "probabilities": {str(i): x for i, x in enumerate(p)},
         "confidence": confidence(p),
     }
 

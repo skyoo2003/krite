@@ -1,6 +1,6 @@
 # Krite Runtime
 
-The Rust runtime serves [Protocol v1](protocol/v1.md) on `POST /v1/systemone`. It encodes each state once, independently of any question, keeps the resulting state memory in a cross-request cache, and scores every candidate with the late-interaction decision tower that the [architecture study](architecture-study.md) accepted (`late8`). Terms follow [ARCHITECTURE.md](../ARCHITECTURE.md).
+The Rust runtime serves [Protocol v1](protocol/v1.md) on `POST /v1/systemone`, plus `GET /v1/models` for the Jev SDK. It encodes each state once, independently of any question, keeps the resulting state memory in a cross-request cache, and scores every candidate with the late-interaction decision tower that the [architecture study](architecture-study.md) accepted (`late8`). Terms follow [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 The model behind it is `krite-0.15b-v0`: the study's `late8` checkpoint (mmBERT-small, 32,000 training examples, seed 13) with per-bucket temperatures. It is a pre-release model; quality numbers are the study's, not a release claim. Its successor `krite-0.15b-v1` (`late8-broad`: the same architecture on the broad training mixture, [training-data.md](training-data.md)) passes every release gate except accuracy (macro accuracy 0.783 vs. 0.795, macro QWK 0.273 vs. 0.357) and ships as a pre-release with that gap stated; serve it with `--model training/ckpt/late8-broad/candle`. The measurements below are v0's.
 
@@ -11,7 +11,7 @@ The model behind it is `krite-0.15b-v0`: the study's `late8` checkpoint (mmBERT-
 | `krite-core` | Protocol v1 request/response/error types, validation the JSON Schemas cannot express, server limits, canonical state string. No ML dependencies. |
 | `krite-runtime` | `Backend` trait, the request pipeline, the state cache, `temperature[type][bucket]` calibration. |
 | `krite-candle` | `CandleBackend`: the late-interaction decision tower on the mmBERT-small (ModernBERT) encoder, Candle Metal or CPU, and the candidate cache. |
-| `krite-server` | axum router for `POST /v1/systemone`: body limit, errors, headers, timing. |
+| `krite-server` | axum router for `POST /v1/systemone` and `GET /v1/models`: body limit, errors, headers, timing. |
 | `krite-cli` | The `krite` binary: `krite serve`, `krite bench-encoder`. |
 
 ## Build and serve
@@ -38,7 +38,7 @@ The server binds `127.0.0.1` only and has no authentication. `--device auto` use
 |---|---|
 | `model.safetensors` | The checkpoint's weights, fp32, torch key names (`encoder.*`, `type_emb.weight`, `scorer.*`). |
 | `config.json`, `tokenizer.json` | The base model's files, `jhu-clsp/mmBERT-small` at `abc32620dd4f6ab06f5fbe905dc25f310618e09f` (training only fine-tunes weights). |
-| `krite.json` | Model id, number of interaction layers, candidate token limits, per-bucket temperatures, and the checkpoint's provenance (training-set hash, seed). |
+| `krite.json` | Model id, number of interaction layers, candidate token limits, per-bucket temperatures, export date (`release_date`, `YYYY-MM-DD`), and the checkpoint's provenance (training-set hash, seed). |
 | `probe.json` | torch CPU energies on synthetic text; the ignored Rust tests check token ids and energies against it. |
 
 Temperatures come from a calibration run: `--calibration ../benchmarks/results/arch/calibration.jsonl --engine krite-raw` ships the temperatures that `krite-bench quality` fitted on the uncalibrated engine `krite-raw` (`krite serve --raw`). The exporter refuses an engine whose start command lacks `--raw`: a fit on already-calibrated probabilities is a correction near 1.0, and shipping it would silently drop the calibration. Without `--calibration`, every temperature is 1.0. The exporter writes into `<out>.staging` and swaps it in only after every file is written, so a failed export leaves the previous directory intact.
@@ -47,10 +47,10 @@ The encoder code is adapted from candle-transformers 0.11.0 (MIT OR Apache-2.0).
 
 ## Request path
 
-1. Parse and validate (`krite-core`). A `model` other than the loaded model id returns `unknown_model`.
-2. Canonicalize the state (string as is; object as its RFC 8785 JCS string, so `{"x":1}` and `{"x":1.0}` are the same state) and tokenize it with `<bos>`/`<eos>`.
+1. Parse and validate (`krite-core`). A `model` other than the loaded model id or `jev-latest` returns `unknown_model`.
+2. Canonicalize the state (string as is; object or array as its RFC 8785 JCS string, so `{"x":1}` and `{"x":1.0}` are the same state) and tokenize it with `<bos>`/`<eos>`.
 3. Look up the state cache. On a miss, run the lower 14 encoder layers on the state and keep its rotated keys and values in each of the top 8 layers (the state memory).
-4. Build one input per candidate: `<bos> instructions \n name[: desc] <eos>`, at most 32 tokens, with up to 14 kept for the criterion. Instructions are tokenized once per question, so tokenization work is linear in the request body (a 256 KiB instruction with 255 criteria tokenizes in under 50 ms). Look up each candidate's lower-layer states in the candidate cache; misses run the lower 14 layers together. In the top 8 layers every candidate attends to the state memory and to its own tokens, never to other candidates, at positions after the state; a masked mean plus a question-type embedding goes to the scorer. Question ids never reach the model.
+4. Build one input per candidate: `<bos> instructions \n name[: desc] <eos>` (JSON instructions and descriptions as their JCS string; absent instructions as nothing), at most 32 tokens, with up to 14 kept for the criterion. Instructions are tokenized once per question, so tokenization work is linear in the request body (a 256 KiB instruction with 255 criteria tokenizes in under 50 ms). Look up each candidate's lower-layer states in the candidate cache; misses run the lower 14 layers together. In the top 8 layers every candidate attends to the state memory and to its own tokens, never to other candidates, at positions after the state; a masked mean plus a question-type embedding goes to the scorer. Question ids never reach the model.
 5. Softmax per question with the bucket temperature from `krite.json`, then build Choice / Score / Noul answers. Choice ties go to the smallest name in codepoint order.
 
 **State cache.** The key is `sha256(model id, tokenizer version, canonical state)`; the tokenizer version is a hash of `tokenizer.json`, so a model or tokenizer change invalidates every entry. The cache is bounded by bytes (`--state-cache-mb`, default 1024 MiB; a 512-token state takes 12 MiB, so the default holds about 85 of them) and evicts the least recently used state. Concurrency is one request at a time (a single lock around the runtime).
@@ -59,7 +59,26 @@ The encoder code is adapted from candle-transformers 0.11.0 (MIT OR Apache-2.0).
 
 **Limits** (Protocol v1 §4): 64 questions, 255 criteria per question, 4 MiB body, 8192 encoder tokens per state, `<bos>` and `<eos>` included (so up to 8190 content tokens), and 65,536 tokens of candidate input per request. Candidates run sorted by length in batches of at most 16,384 padded tokens, in the lower and the top layers (and, in the top layers, at most 256 MiB of attention scores), so a request of many short candidates and one long one does not pad every candidate to the longest: such a request (5,721 candidates, 52 questions) peaks at 4.9 GiB physical footprint, against 9.7 GiB with one batch.
 
-**Headers.** Every response carries `x-krite-request-id` and `x-typesafe-request-id` (same value). A 200 also carries `x-krite-state-cache: hit|miss` and `x-krite-timing: tokenize=…;encode=…;decide=…;calibrate=…` in milliseconds.
+**Headers.** Every response carries `x-krite-request-id` and `x-typesafe-request-id` (same value). A 200 from `/v1/systemone` also carries `x-krite-state-cache: hit|miss` and `x-krite-timing: tokenize=…;encode=…;decide=…;calibrate=…` in milliseconds.
+
+## Jev compatibility
+
+The official TypeSafe Python SDK (`typesafe-sdk`, MIT) works against `krite serve` with only `base_url` changed. The SDK requires an API key client-side; any value works, since the server has no authentication.
+
+```python
+from typesafe_sdk import Choice, TypeSafeClient
+
+with TypeSafeClient(api_key="any", base_url="http://127.0.0.1:8110") as client:
+    r = client.system_one(state={"document": "I was charged twice."},
+                          questions={"category": Choice(criteria={"billing": None, "technical": None})})
+```
+
+- The SDK sends `model: "jev-latest"` unless told otherwise; the server resolves that alias to the loaded model and answers with the real id.
+- `GET /v1/models` lists the loaded model and `jev-latest` (`{"models": [{"name", "description", "release_date"}]}`; `release_date` is empty for exports that predate the field).
+- Score answers key `probabilities` and `legend` by level index, which the SDK reads as integer keys.
+- Wire differences that remain are listed in [Protocol v1 §7](protocol/v1.md#7-differences-from-jev).
+
+`compat/jev` is the conformance suite: it drives the server through the SDK (pinned to 0.7.2, sync and async clients) and checks shapes, keys, sums, the alias, `GET /v1/models`, SDK-legal request forms (array or object state, absent or JSON instructions, JSON criteria), state key-order invariance, and 422 errors. It never checks answer values, so it runs against any model. `scripts/check-compat.sh` runs it against the weight-free `hash_server` example (CI: `.github/workflows/compat.yml`); against a real model, start `krite serve` and run `KRITE_BASE_URL=http://127.0.0.1:8110 uv run pytest -q` in `compat/jev`. `krite-0.15b-v1` passes it.
 
 ## Measured
 

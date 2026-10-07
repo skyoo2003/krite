@@ -1,4 +1,4 @@
-//! `POST /v1/systemone` (docs/protocol/v1.md) over a `Runtime`. Binds loopback only; no auth.
+//! `POST /v1/systemone` (docs/protocol/v1.md) and `GET /v1/models` over a `Runtime`. Binds loopback only; no auth.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -8,10 +8,11 @@ use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use krite_core::ApiError;
-use krite_runtime::{Backend, Runtime};
+use krite_runtime::{Backend, JEV_ALIAS, Runtime};
+use serde_json::json;
 
 /// axum's own limit; bodies between the protocol limit (4 MiB) and this get the Protocol 422, not a plain 413.
 const AXUM_BODY_LIMIT: usize = 16 * 1024 * 1024;
@@ -32,6 +33,7 @@ pub fn router<B: Backend>(rt: Runtime<B>) -> Router {
     let app = App { max_body: rt.limits().max_body_bytes, rt: Arc::new(Mutex::new(rt)) };
     Router::new()
         .route("/v1/systemone", post(systemone::<B>))
+        .route("/v1/models", get(models::<B>))
         .layer(DefaultBodyLimit::max(AXUM_BODY_LIMIT))
         .with_state(app)
 }
@@ -60,11 +62,31 @@ fn error(e: ApiError, headers: HeaderMap) -> Response {
     (status, headers, Json(e.body())).into_response()
 }
 
-async fn systemone<B: Backend>(State(app): State<App<B>>, body: Bytes) -> Response {
+fn id_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     let rid = HeaderValue::from_str(&request_id()).expect("hex is a valid header value");
     headers.insert("x-krite-request-id", rid.clone());
     headers.insert("x-typesafe-request-id", rid);
+    headers
+}
+
+/// The served model and the Jev SDK's default alias for it (`ModelMetadataList` in the SDK).
+async fn models<B: Backend>(State(app): State<App<B>>) -> Response {
+    let headers = id_headers();
+    let Ok(rt) = app.rt.lock() else {
+        return error(ApiError::internal("runtime lock poisoned by an earlier panic"), headers);
+    };
+    let b = rt.backend();
+    let (id, date) = (b.model_id(), b.release_date());
+    let models = json!({"models": [
+        {"name": id, "description": format!("Krite decision model ({})", b.backend_name()), "release_date": date},
+        {"name": JEV_ALIAS, "description": format!("Alias for {id}"), "release_date": date},
+    ]});
+    (StatusCode::OK, headers, Json(models)).into_response()
+}
+
+async fn systemone<B: Backend>(State(app): State<App<B>>, body: Bytes) -> Response {
+    let mut headers = id_headers();
     if body.len() > app.max_body {
         let msg = format!("request body is {} bytes; max is {}", body.len(), app.max_body);
         return error(ApiError::invalid(msg, None), headers);
