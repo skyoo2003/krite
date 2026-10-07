@@ -12,7 +12,7 @@ The model behind it is `krite-0.15b-v0`: the study's `late8` checkpoint (mmBERT-
 | `krite-runtime` | `Backend` trait, the request pipeline, the state cache, `temperature[type][bucket]` calibration. |
 | `krite-candle` | `CandleBackend`: the late-interaction decision tower on the mmBERT-small (ModernBERT) encoder, Candle Metal or CPU, and the candidate cache. |
 | `krite-server` | axum router for `POST /v1/systemone` and `GET /v1/models`: body limit, errors, headers, timing. |
-| `krite-cli` | The `krite` binary: `krite serve`, `krite bench-encoder`. |
+| `krite-cli` | The `krite` binary: `krite serve`, `krite bench-encoder`, `krite bench-decide`. |
 
 ## Build and serve
 
@@ -24,6 +24,7 @@ cargo build --release -p krite-cli
 target/release/krite serve --model training/ckpt/late8/candle [--port 8110] [--device auto|cpu] \
     [--state-cache-mb 1024] [--candidate-cache-mb 64] [--raw]
 target/release/krite bench-encoder --model training/ckpt/late8/candle [--tokens 64,512,2048] [--warmup 20] [--n 200]
+target/release/krite bench-decide --model training/ckpt/late8/candle [--state-tokens 512] [--questions 1,10,30] [--label step]
 scripts/check-rust.sh                                                   # fmt, clippy -D warnings, tests
 KRITE_MODEL=$PWD/training/ckpt/late8/candle cargo test -p krite-candle --release -- --ignored
 ```
@@ -79,6 +80,15 @@ with TypeSafeClient(api_key="any", base_url="http://127.0.0.1:8110") as client:
 - Wire differences that remain are listed in [Protocol v1 §7](protocol/v1.md#7-differences-from-jev).
 
 `compat/jev` is the conformance suite: it drives the server through the SDK (pinned to 0.7.2, sync and async clients) and checks shapes, keys, sums, the alias, `GET /v1/models`, SDK-legal request forms (array or object state, absent or JSON instructions, JSON criteria), state key-order invariance, and 422 errors. It never checks answer values, so it runs against any model. `scripts/check-compat.sh` runs it against the weight-free `hash_server` example (CI: the `compat` job in `.github/workflows/ci.yml`); against a real model, start `krite serve` and run `KRITE_BASE_URL=http://127.0.0.1:8110 uv run pytest -q` in `compat/jev`. `krite-0.15b-v1` passes it.
+
+## Optimization rules
+
+Written down before any runtime optimization step was measured. Each step rewrites tensor layouts so that Candle runs its contiguous Metal kernels instead of the strided ones; it must not change what the model computes. The rules decide each step; the thresholds do not change after a result is seen.
+
+- **R1 parity (each step).** `scripts/check-rust.sh` passes (CPU unit tests, including the late-attention reference), and `KRITE_MODEL=$PWD/training/ckpt/late8-broad/candle cargo test -p krite-candle --release -- --ignored` passes unchanged: torch probe max \|Δ energy\| ≤ 1e-4; warm, reversed, crowded, and uncached ≤ 1e-5.
+- **R2 speed (each step).** `krite bench-decide` (512 state tokens, 1/10/30 questions, K = 4, n = 50) runs right before and right after the step, on AC power with nothing else running. The step is kept only if its target p50 drops by at least 3% and no other p50 (`encode_ms`, decide at 1, 10, and 30 questions) rises by more than 3%. Otherwise it is reverted and recorded as rejected. Targets: attention masks and head layout, `encode_ms`; late attention and stacked projections, decide at 30 questions. Rows go to [`benchmarks/results/arch/decide.jsonl`](../benchmarks/results/arch/decide.jsonl); the first row is the baseline.
+- **R3 final (whole binary).** Engine `krite-v1-fast` serves the same `krite-0.15b-v1` export from the optimized binary. `study compare --a krite-v1 --b krite-v1-fast --tol 1e-4` passes on the cache suites, and `study release --engine krite-v1-fast --raw krite-v1-raw --nocache krite-v1-fast-nocache` passes every latency and invariant row. Accuracy and QWK are reported, not gated: the weights do not change. Burst and sustained runs are both reported (sustained is the primary cell, 10 minutes).
+- **Precision stays fp32.** Measured on the 30-question shapes, an f16 gemm is only 1.3–1.7× faster than f32, the strided non-matmul ops that dominate do not get faster, and lower precision would put the 1e-5 invariance gates and the fitted temperatures at risk.
 
 ## Measured
 
