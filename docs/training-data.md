@@ -859,12 +859,28 @@ this recipe: a larger encoder (mmBERT-base, ~0.4B) or a revised accuracy target.
 
 ### Feasibility: mmBERT-base
 
-Not run yet.
+1% pilot of `base8-broad` (740 examples, 43 steps), exported and served as `krite-base-pilot` on
+Candle Metal, engine alone on AC power. Raw output:
+[`feasibility-base.json`](../benchmarks/results/arch/feasibility-base.json).
+
+| Check | Limit | `krite-0.15b-v1` | mmBERT-base pilot | Pass |
+|---|---|---|---|---|
+| Candle numerics | weight tests pass | pass | pass (3 of 3) | yes |
+| warm latency p50 | ≤ 10 ms | 7.8 ms | 18.7 ms | **no** |
+| cold latency p50 | ≤ 210 ms | 90 ms | 219 ms | **no** |
+| throughput (30 questions) | ≥ 175 decisions/s | 212 | 77 | **no** |
+| training memory (MPS peak) | ≤ 10 GiB | 6.1 GiB | 11.7 GiB | no (accumulation not tried) |
+
+**Verdict: infeasible; the encoder stage stops before training.** Every latency cell is about 2.4×
+small's (warm 512/10/4: 44 → 130 ms; cold 512/30/4: 225 → 662 ms), close to the 2.6× ratio of
+non-embedding compute, so the fp32 Candle path is compute-bound at this size rather than
+overhead-bound. The pilot has 307.5M parameters (196.6M embedding, 110.9M other) and trained at
+3.2 examples/s. Because the latency rows already fail, the memory fallback was not run.
 
 ### Stage E: encoder
 
-Not run yet.
+Not run: feasibility failed.
 
 ### Release gate: mmBERT-base
 
-Not run yet.
+Not run: feasibility failed. `krite-0.15b-v1` stays the best model.
