@@ -1163,7 +1163,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "krite-candle"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -1177,7 +1177,7 @@ dependencies = [
 
 [[package]]
 name = "krite-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -1191,7 +1191,7 @@ dependencies = [
 
 [[package]]
 name = "krite-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1210,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "krite-runtime"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "krite-core",
@@ -1220,7 +1220,7 @@ dependencies = [
 
 [[package]]
 name = "krite-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
