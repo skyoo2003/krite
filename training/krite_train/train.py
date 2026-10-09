@@ -40,8 +40,9 @@ def losses(e: torch.Tensor, gold: torch.Tensor, qtype: torch.Tensor, spec: dict)
     score = qtype == m.QTYPES["score"]
     # Batches share K, not type: the ordinal term must skip choice and noul rows.
     if spec.get("ordinal") and score.any():
+        ord_w = spec.get("ord_w", ORD_W)
         d = (p[score].cumsum(-1) - y[score].cumsum(-1)).pow(2).sum(-1) / (e.size(-1) - 1)
-        loss = loss + ORD_W * d.mean()
+        loss = loss + ord_w * d.mean()
     return loss
 
 
@@ -88,6 +89,7 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--seed", type=int, default=SEED)
     ap.add_argument("--out", type=Path, default=CKPT_DIR)
+    ap.add_argument("--init-ckpt", type=Path, help="checkpoint directory to initialize weights from")
     a = ap.parse_args()
 
     spec = m.ARMS[a.arm]
@@ -107,7 +109,12 @@ def main() -> None:
     print(f"{len(examples)} examples, {len(batches)} batches, tokenized in {time.time() - t0:.0f}s", flush=True)
 
     device = "mps" if torch.backends.mps.is_available() else "cpu"
-    net = m.build(a.arm).to(device).train()
+    if a.init_ckpt:
+        print(f"initializing weights from {a.init_ckpt}", flush=True)
+        _, net, _ = m.load(a.init_ckpt, device)
+        net.train()
+    else:
+        net = m.build(a.arm).to(device).train()
     # Without checkpointing the MPS allocator peaked at 11.5 GiB (d2, K=12) and a 16 GB machine swapped.
     net.encoder.gradient_checkpointing_enable()
     enc = {id(p) for p in net.encoder.parameters()}
@@ -131,9 +138,10 @@ def main() -> None:
         sched.step()
         opt.zero_grad()
         window.append(loss.item())
-        if device == "mps":  # every step: cached buffers for each K shape otherwise pile up
+        if device == "mps":  # periodically flush cached buffers for varying K shapes
             peak = max(peak, torch.mps.driver_allocated_memory())
-            torch.mps.empty_cache()
+            if step % 25 == 0:
+                torch.mps.empty_cache()
         if step % 100 == 0 or step == steps - 1:
             rate = (step + 1) * a.batch / (time.time() - t0)
             mean = sum(window) / len(window)
@@ -151,7 +159,10 @@ def main() -> None:
         "train_sha256": sources.pop("train_sha256"),
         "mixture": sources.pop("mixture"),
         "sources": sources,
-        "loss": {"brier": BRIER_W if spec.get("brier") else 0, "ordinal": ORD_W if spec.get("ordinal") else 0},
+        "loss": {
+            "brier": BRIER_W if spec.get("brier") else 0,
+            "ordinal": spec.get("ord_w", ORD_W) if spec.get("ordinal") else 0,
+        },
         "seed": seed,
         "scale": a.scale,
         "steps": steps,

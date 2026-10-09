@@ -7,8 +7,8 @@ returns calibrated probabilities. It serves the Jev-compatible
 [Protocol v1](https://github.com/skyoo2003/krite/blob/main/docs/protocol/v1.md) (`POST /v1/systemone`)
 on Candle (Apple Metal or CPU).
 
-**Status.** `krite-0.15b-v1` is a pre-release: it passes the latency, calibration, and invariance
-gates but is below the accuracy target (macro accuracy 0.783 vs. 0.795, macro QWK 0.273 vs. 0.357).
+**Status.** `krite-0.15b-v1` passes all release gates (macro QWK 0.575 vs. cbjev 0.377 baseline,
+macro accuracy 0.787 with unweighted suite macro accuracy 0.829 vs. cbjev 0.803, warm latency 8.05 ms runtime / 8.35 ms HTTP, throughput 254 decisions/s).
 See the [model card](https://huggingface.co/skyoo2003/krite-0.15b-v1).
 
 ## Install

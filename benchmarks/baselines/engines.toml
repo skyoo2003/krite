@@ -346,14 +346,23 @@ backend = "torch-mps"
 precision = "fp32"
 start = "python shims/arch_shim.py --ckpt ../../training/ckpt/late8-e2-s14 --port 8146"
 
-# Release model (docs/training-data.md): late8-broad, seed 13. Temperatures are fitted on krite-v1-raw.
+[arch-late8-v2]
+port = 8150
+venv = true
+venv_from = "arch-b"
+model = "arch-late8-v2"
+backend = "torch-mps"
+precision = "fp32"
+start = "python shims/arch_shim.py --ckpt ../../training/ckpt/late8-v2 --port 8150"
+
+# Release model: late8-v2. Temperatures are fitted on krite-v1-raw.
 [krite-v1]
 port = 8147
 venv = false
 model = "krite-0.15b-v1"
 backend = "candle-metal"
 precision = "fp32"
-start = "../../target/release/krite serve --port 8147 --model ../../training/ckpt/late8-broad/candle"
+start = "../../target/release/krite serve --port 8147 --model ../../training/ckpt/late8-v2/candle"
 
 [krite-v1-raw]
 port = 8148
@@ -361,7 +370,7 @@ venv = false
 model = "krite-0.15b-v1"
 backend = "candle-metal"
 precision = "fp32"
-start = "../../target/release/krite serve --port 8148 --model ../../training/ckpt/late8-broad/candle --raw"
+start = "../../target/release/krite serve --port 8148 --model ../../training/ckpt/late8-v2/candle --raw"
 
 [krite-v1-nocache]
 port = 8149
@@ -369,7 +378,7 @@ venv = false
 model = "krite-0.15b-v1"
 backend = "candle-metal"
 precision = "fp32"
-start = "../../target/release/krite serve --port 8149 --model ../../training/ckpt/late8-broad/candle --state-cache-mb 0 --candidate-cache-mb 0"
+start = "../../target/release/krite serve --port 8149 --model ../../training/ckpt/late8-v2/candle --state-cache-mb 0 --candidate-cache-mb 0"
 
 # Encoder stage (docs/training-data.md, "Encoder"): mmBERT-base. 8150 times a 1% pilot export before
 # full training; 8151/8152 are the torch arms; 8153–8155 the release candidate, its uncalibrated twin,

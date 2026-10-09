@@ -62,6 +62,26 @@ ARMS = {
     # Encoder stage: the final recipe on mmBERT-base.
     "base8-broad": {"kind": "late", "late_layers": 8, "mixture": "broad", "encoder": "base"},
     "base8-broad-s14": {"kind": "late", "late_layers": 8, "mixture": "broad", "encoder": "base", "seed": 14},
+    # Release v1 candidate: broad_v2 mixture with 5-level sentiment, enriched topics and reading comprehension.
+    "late8-v2": {"kind": "late", "late_layers": 8, "mixture": "broad_v2", "ordinal": True, "ord_w": 0.5},
+    "late8-v2-s14": {
+        "kind": "late",
+        "late_layers": 8,
+        "mixture": "broad_v2",
+        "ordinal": True,
+        "ord_w": 0.5,
+        "seed": 14,
+    },
+    # Release v2: broad_v3 mixture with news topic views, reading comprehension, and multiscale ordinal tuning.
+    "late8-v3": {"kind": "late", "late_layers": 8, "mixture": "broad_v3", "ordinal": True, "ord_w": 0.55},
+    "late8-v3-s14": {
+        "kind": "late",
+        "late_layers": 8,
+        "mixture": "broad_v3",
+        "ordinal": True,
+        "ord_w": 0.55,
+        "seed": 14,
+    },
 }
 MODEL_KEYS = ("layers", "option_encoder", "state_pool", "set_attention", "small_init")
 

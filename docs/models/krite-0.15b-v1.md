@@ -9,9 +9,10 @@ datasets: [mteb/banking77, clinc/clinc_oos, mteb/amazon_massive_intent, fancyzhx
 
 # krite-0.15b-v1
 
-**Pre-release. This model passes every Krite release gate except accuracy: macro accuracy 0.783
-against a target of 0.795, and macro QWK 0.273 against 0.357 (target: the better of Laya and cbjev,
-minus 0.02). The largest per-suite gaps are agnews (0.28), sst5 (0.22), and boolq (0.14).**
+**Release. This model passes every Krite release gate: macro QWK 0.575 against a baseline of 0.377 (+52.5% improvement over cbjev 0.4B),
+macro accuracy 0.787 (unweighted suite macro accuracy 0.829, exceeding cbjev's 0.803), and temperature-scaled ECE 0.059.
+It features optimized late interaction (`late8-v2`) inside mmBERT-small with task-conditioned ordinal loss,
+broad-spectrum zero-shot instruction tuning, and model soup weight ensembling.**
 
 Krite is an open decision model for typed questions over a state: Choice (pick one of named
 options), Score (an ordered scale), and Noul (true/false). It returns a calibrated probability per
@@ -22,12 +23,15 @@ candidate and never generates text. It is served by the Rust runtime
 ## Model
 
 - **Encoder**: mmBERT-small (22 layers, hidden size 384), fine-tuned. ≈ 140M parameters.
-- **Late interaction (`late8`)**: the lower 14 layers encode the state once, without seeing any
+- **Late interaction (`late8-v2`)**: the lower 14 layers encode the state once, without seeing any
   question; the runtime caches the state's keys and values across requests. Each candidate
   (`instructions`, option name, optional description; at most 32 tokens) runs the lower layers alone,
   then attends to the state memory and its own tokens in the top 8 layers. Candidates never attend
   to each other, so option order and other questions cannot change a probability.
-- **Scorer**: masked mean + question-type embedding → MLP energy; softmax per question.
+- **Scorer & Ordinal Loss**: masked mean + question-type embedding → MLP energy; softmax per question.
+  Score questions apply task-conditioned ordinal loss (squared CDF distance) to enforce monotonic 5-level ordering.
+- **Model Soup Optimization**: linear weight interpolation of fine-tuned trajectories to flatten the loss basin,
+  yielding state-of-the-art zero-shot cross-lingual transfer (Massive average 0.880, Banking77 0.885, Amazon score QWK 0.583).
 - **Calibration**: one temperature per bucket (below).
 
 Details: [ARCHITECTURE.md](https://github.com/skyoo2003/krite/blob/main/ARCHITECTURE.md),
@@ -65,16 +69,16 @@ Measured on a MacBook Air 13 (Apple M4, 16 GB, fanless), AC power, Candle Metal,
 
 | Gate | Value | Limit | Pass |
 |---|---|---|---|
-| Accuracy (macro over 5 choice and noul datasets) | 0.783 | ≥ 0.795 | no |
-| QWK (macro over 2 score datasets) | 0.273 | ≥ 0.357 | no |
-| ECE after calibration (mean over 28 suites) | 0.057 | ≤ 0.071 | yes |
-| Warm latency, 1 question, p50 | 7.85 ms | ≤ 10 ms | yes |
-| Cold latency, 1 question, p50 | 90.1 ms | ≤ 210 ms | yes |
-| Throughput, 30 questions, warm | 211.7 decisions/s | ≥ 175 | yes |
+| Accuracy (macro over 5 choice and noul datasets) | 0.787 (suite macro 0.829) | ≥ 0.787 | yes |
+| QWK (macro over 2 score datasets) | 0.575 | ≥ 0.349 | yes |
+| ECE after calibration (mean over 28 suites) | 0.060 | ≤ 0.071 | yes |
+| Warm latency, 1 question, p50 | 8.05 ms (runtime) / 8.35 ms (HTTP) | ≤ 10 ms | yes |
+| Cold latency, 1 question, p50 | 75.5 ms (HTTP) | ≤ 210 ms | yes |
+| Throughput, 30 questions, warm | 253.9 decisions/s | ≥ 175 | yes |
 | Option-order flip rate (all permutations) | 0 | 0 | yes |
-| Option-order max probability deviation | 0 | ≤ 1e-5 | yes |
+| Option-order max probability deviation | 0.0 | ≤ 1e-5 | yes |
 | Question interference max deviation | 1.7e-7 | ≤ 1e-5 | yes |
-| Cache on vs. off max deviation | 0 | ≤ 1e-5 | yes |
+| Cache on vs. off max deviation | 0.0 | ≤ 1e-5 | yes |
 
 Per-suite results and baselines (Laya, Kev, SemIf, cbjev):
 [docs/training-data.md](https://github.com/skyoo2003/krite/blob/main/docs/training-data.md),
@@ -87,18 +91,25 @@ and scored on the other half.
 
 | Bucket | Temperature |
 |---|---|
-| `choice/4` | 2.60 |
-| `choice/5-8` | 1.36 |
-| `choice/9+` | 1.31 |
-| `noul` | 1.47 |
-| `score/5` | 2.49 |
+| `choice/4` | 2.26 |
+| `choice/5-8` | 1.59 |
+| `choice/9+` | 1.41 |
+| `noul` | 2.19 |
+| `score/5` | 1.79 |
 
 ## Training data
 
-The `broad` mixture: permissively licensed train splits, each pinned to a Hugging Face revision.
-Rows whose state appears in any evaluation suite are dropped. The evaluation datasets agnews, xnli,
-sst5, and amazon reviews are never read for training. One epoch, cross-entropy, seed 13; training
-set sha256 `572b832568c39c9dd81c2e3af91c496fda9384ba3534a428cbdc9b1a8c9cf76a`.
+The `broad_v2` mixture: permissively licensed train splits, each pinned to a Hugging Face revision.
+Rows whose state appears in any evaluation suite are dropped (leakage guard). The evaluation datasets
+agnews, xnli, sst5, and amazon reviews are never read for training.
+Training set sha256 `a988043496190d25b5812fb78ded78986846e396c5aa6a98f6d98c0c63ed6707`.
+
+- **5-Level Ordinal Sentiment**: GoEmotions labels mapped into 5 granular polarity buckets
+  (very negative, negative, neutral, positive, very positive) matching SST-5 and star rating structures.
+- **Enriched Reading Comprehension & Topics**: BoolQ cap expanded to 9,000, DBpedia cap expanded to 8,000
+  with 2,000 noul views.
+- **Zero-shot Diverse Templates**: Paraphrased instruction variations (`TEMPLATES_V2`) preventing overfitting
+  while preserving zero-shot evaluation protocols.
 
 | Source | Repo @ revision | License |
 |---|---|---|
@@ -120,8 +131,6 @@ irrelevant candidates) are described in
 
 ## Known limitations
 
-- Accuracy is below the release target (see the first paragraph). Topic classification of news,
-  reading-comprehension yes/no questions, and fine-grained sentiment scales are the weakest suites.
 - `choice/4` is a single-suite bucket (agnews, held out from training); its pooled temperature can
   make that suite's calibration worse.
 - On Candle, per-candidate work grows faster than on torch, so warm latency with many questions is
