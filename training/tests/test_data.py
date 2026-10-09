@@ -183,6 +183,15 @@ def test_build_broad_small_scale():
 
 
 @pytest.mark.network
+def test_build_broad_v2_small_scale():
+    exs, meta = d.build(scale=0.01, mixture="broad_v2")
+    assert {e["source"] for e in exs} == set(d.SOURCES) and meta["mixture"] == "broad_v2"
+    go_exs = [e for e in exs if e["source"] == "goemotions" and not e.get("view")]
+    assert all(len(e["candidates"]) == 5 for e in go_exs)
+    assert meta["boolq"]["n"] == 90 and meta["dbpedia"]["n"] == 80
+
+
+@pytest.mark.network
 def test_nli_option_fits():
     from krite_train import model as m
 

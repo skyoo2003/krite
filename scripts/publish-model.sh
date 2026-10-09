@@ -3,7 +3,7 @@
 # Log in first: uvx --from huggingface_hub hf auth login. Usage: scripts/publish-model.sh [repo id]
 set -euo pipefail
 cd "$(dirname "$0")/.."
-model=training/ckpt/late8-broad/candle
+model=${KRITE_MODEL_DIR:-training/ckpt/late8-v2/candle}
 repo=${1:-skyoo2003/krite-0.15b-v1}
 if ! grep -q '"model_id": "krite-0.15b-v1"' "$model/krite.json"; then
   echo "FAIL: $model is not krite-0.15b-v1" >&2; exit 1

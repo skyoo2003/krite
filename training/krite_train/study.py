@@ -153,21 +153,23 @@ MARGIN = 0.02
 STAGE_GAIN, IN_DOMAIN_DROP = 0.10, 0.01
 # Release gate: PRD Key Hypothesis, docs/baselines.md "Derived Krite targets".
 RELEASE = {"ece": 0.071, "warm_ms": 10.0, "cold_ms": 210.0, "dec_per_s": 175.0}
+# Competitor-equivalent release gate (cbjev Acc >= 0.815, Kev QWK >= 0.45, Warm <= 5ms, Throughput >= 300)
+RELEASE_V2 = {"ece": 0.055, "warm_ms": 5.0, "cold_ms": 100.0, "dec_per_s": 300.0}
 
 
 def _value(r: dict, qtype: str) -> float:
     return r["qwk"] if qtype == "score" else r["accuracy"]
 
 
-def targets(baselines: Path = BASELINES) -> dict[str, float]:
-    """Per-suite target: best of TARGET_ENGINES minus MARGIN (latest quality row per engine and suite)."""
+def targets(baselines: Path = BASELINES, margin: float = MARGIN) -> dict[str, float]:
+    """Per-suite target: best of TARGET_ENGINES minus margin (latest quality row per engine and suite)."""
     q = _latest(_rows(baselines / "quality.jsonl"), "engine", "suite")
     out = {}
     for s in suites():
         vals = [_value(q[(e, s.id)], s.type) for e in TARGET_ENGINES if (e, s.id) in q]
         if not vals:
             raise SystemExit(f"{s.id}: no baseline quality rows for {TARGET_ENGINES} in {baselines}")
-        out[s.id] = max(vals) - MARGIN
+        out[s.id] = max(vals) - margin
     return out
 
 
@@ -208,8 +210,8 @@ def macro(vals: dict[str, float]) -> dict[str, float]:
     }
 
 
-def reference(baselines: Path = BASELINES) -> dict:
-    """Per macro metric, the best whole reference engine minus MARGIN."""
+def reference(baselines: Path = BASELINES, margin: float = MARGIN, qwk_floor: float = 0.0) -> dict:
+    """Per macro metric, the best whole reference engine minus margin."""
     q = _latest(_rows(baselines / "quality.jsonl"), "engine", "suite")
     engines = {}
     for name, rows in REFERENCE_ENGINES.items():
@@ -220,9 +222,12 @@ def reference(baselines: Path = BASELINES) -> dict:
                 raise SystemExit(f"{name} {s.id}: no baseline quality row in {baselines}")
             vals[s.id] = _value(r, s.type)
         engines[name] = macro(vals)
+    tgs = {m: max(e[m] for e in engines.values()) - margin for m in ("accuracy", "qwk")}
+    if qwk_floor:
+        tgs["qwk"] = max(tgs["qwk"], qwk_floor)
     return {
         "engines": engines,
-        "targets": {m: max(e[m] for e in engines.values()) - MARGIN for m in ("accuracy", "qwk")},
+        "targets": tgs,
     }
 
 
@@ -277,23 +282,31 @@ def _at_least(v, floor):
     return {"value": v, "limit": floor, "pass": v is not None and v >= floor}
 
 
-def latency_gates(out: Path, engine: str) -> dict:
+def latency_gates(out: Path, engine: str, limits: dict = RELEASE) -> dict:
     """The release gate's latency rows; they depend on shapes, not trained weights."""
     warm30 = latency_p50(out, engine, "warm", 30)
     return {
-        "warm latency (ms)": _at_most(latency_p50(out, engine, "warm", 1), RELEASE["warm_ms"]),
-        "cold latency (ms)": _at_most(latency_p50(out, engine, "cold", 1), RELEASE["cold_ms"]),
-        "decisions/sec (30 questions)": _at_least(30_000 / warm30 if warm30 else None, RELEASE["dec_per_s"]),
+        "warm latency (ms)": _at_most(latency_p50(out, engine, "warm", 1), limits["warm_ms"]),
+        "cold latency (ms)": _at_most(latency_p50(out, engine, "cold", 1), limits["cold_ms"]),
+        "decisions/sec (30 questions)": _at_least(30_000 / warm30 if warm30 else None, limits["dec_per_s"]),
     }
 
 
-def feasibility(out: Path, engine: str) -> dict:
+def feasibility(out: Path, engine: str, limits: dict = RELEASE) -> dict:
     """Latency rows of the release gate on an untrained export, before any full training run."""
-    gates = latency_gates(out, engine)
+    gates = latency_gates(out, engine, limits)
     return {"engine": engine, "gates": gates, "feasible": all(g["pass"] for g in gates.values())}
 
 
-def release(out: Path, engine: str, raw: str, nocache: str, tg: dict[str, float], ref: dict) -> dict:
+def release(
+    out: Path,
+    engine: str,
+    raw: str,
+    nocache: str,
+    tg: dict[str, float],
+    ref: dict,
+    limits: dict = RELEASE,
+) -> dict:
     """Release gate. Missing data fails a gate, never passes it. The per-suite shortfall against the
     best baseline per suite is reported, not gated."""
     _, per = shortfall(out, engine, tg)
@@ -302,8 +315,8 @@ def release(out: Path, engine: str, raw: str, nocache: str, tg: dict[str, float]
     gates = {
         "accuracy (macro, choice and noul)": _at_least(m["accuracy"], ref["targets"]["accuracy"]),
         "QWK (macro, score)": _at_least(m["qwk"], ref["targets"]["qwk"]),
-        "ECE": _at_most(mean_scaled_ece(out, raw), RELEASE["ece"]),
-        **latency_gates(out, engine),
+        "ECE": _at_most(mean_scaled_ece(out, raw), limits["ece"]),
+        **latency_gates(out, engine, limits),
         "I1 flip rate": _at_most(inv["flip_rate"], 0.0),
         "I1 invariance max dev": _at_most(inv["invariance_max_dev"], TOL),
         "I2 interference max dev": _at_most(inv["interference_max_dev"], TOL),
@@ -330,7 +343,18 @@ def main() -> None:
     ap.add_argument("--engine", default="krite-v1", help="release: calibrated engine; feasibility: engine to time")
     ap.add_argument("--raw", default="krite-v1-raw", help="release: engine the temperatures were fitted on")
     ap.add_argument("--nocache", default="krite-v1-nocache", help="release: the engine with both caches off")
+    ap.add_argument(
+        "--v2",
+        action="store_true",
+        help="competitor-equivalent release gate v2 (margin 0, warm <= 5ms, dec/s >= 300, ECE <= 0.055)",
+    )
+    ap.add_argument("--margin", type=float, default=None, help="override margin")
     a = ap.parse_args()
+
+    margin = (0.0 if a.v2 else MARGIN) if a.margin is None else a.margin
+    limits = RELEASE_V2 if a.v2 else RELEASE
+    qwk_floor = 0.45 if a.v2 else 0.0
+
     if a.cmd == "compare":
         dev = compare(a.out, a.a, a.b)
         print(f"max |Δp| {a.a} vs {a.b}: {dev:.3g}")
@@ -341,12 +365,13 @@ def main() -> None:
     elif a.cmd == "stage":
         if not a.base or not a.new:
             raise SystemExit("stage needs --base and --new")
-        print(json.dumps(stage(a.out, a.base.split(","), a.new.split(","), targets(a.baselines)), indent=2))
+        tg = targets(a.baselines, margin=margin)
+        print(json.dumps(stage(a.out, a.base.split(","), a.new.split(","), tg), indent=2))
     elif a.cmd == "feasibility":
-        print(json.dumps(feasibility(a.out, a.engine), indent=2))
+        print(json.dumps(feasibility(a.out, a.engine, limits=limits), indent=2))
     else:
-        ref = reference(a.baselines)
-        v = release(a.out, a.engine, a.raw, a.nocache, targets(a.baselines), ref)
+        ref = reference(a.baselines, margin=margin, qwk_floor=qwk_floor)
+        v = release(a.out, a.engine, a.raw, a.nocache, targets(a.baselines, margin=margin), ref, limits=limits)
         print(json.dumps({**v, "reference": ref["engines"]}, indent=2))
 
 

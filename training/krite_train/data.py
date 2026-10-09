@@ -141,13 +141,25 @@ SOURCES = {
 MIXTURES = {
     "study": ("banking77", "clinc", "massive", "dbpedia", "boolq", "snli", "civil"),
     "broad": tuple(SOURCES),
+    "broad_v2": tuple(SOURCES),
+    "broad_v3": tuple(SOURCES),
 }
-CAPS = {"broad": {"boolq": 8000}}  # per-mixture cap overrides
+CAPS = {
+    "broad": {"boolq": 8000},
+    "broad_v2": {"boolq": 9000, "dbpedia": 8000, "goemotions": 8000},
+    "broad_v3": {"boolq": 10000, "dbpedia": 9000, "goemotions": 9000, "sib200": 8000},
+}  # per-mixture cap overrides
 LANG_GROUPS = {"massive": kb.MASSIVE_LANGS, "sib200": list(SIB_LANGS), "pawsx": PAWSX_LANGS}
 
 CIVIL_LEVELS = ["not toxic", "slightly toxic", "moderately toxic", "very toxic", "extremely toxic"]
 CIVIL_EDGES = [0.2, 0.4, 0.6, 0.8]
 SENTIMENT_LEVELS = [("negative", "neutral", "positive"), ("unhappy", "neutral", "happy")]
+SENTIMENT_5_LEVELS = [
+    ("very negative", "negative", "neutral", "positive", "very positive"),
+    ("terrible", "bad", "neutral", "good", "great"),
+    ("1 star", "2 stars", "3 stars", "4 stars", "5 stars"),
+    ("hate it", "dislike it", "neutral", "like it", "love it"),
+]
 LEVEL_GROUPS = {"civil": len(CIVIL_LEVELS), "goemotions": 3}
 # GoEmotions authors' sentiment grouping; ambiguous emotions (confusion, curiosity, realization, surprise) are absent.
 POLARITY = {
@@ -159,6 +171,25 @@ POLARITY = {
     "neutral": 1,
     **dict.fromkeys(
         "admiration amusement approval caring desire excitement gratitude joy love optimism pride relief".split(), 2
+    ),
+}
+POLARITY_5 = {
+    **dict.fromkeys(
+        "anger disgust fear grief remorse".split(),
+        0,
+    ),
+    **dict.fromkeys(
+        "annoyance disappointment disapproval embarrassment nervousness sadness".split(),
+        1,
+    ),
+    "neutral": 2,
+    **dict.fromkeys(
+        "amusement approval caring desire optimism pride relief".split(),
+        3,
+    ),
+    **dict.fromkeys(
+        "admiration excitement gratitude joy love".split(),
+        4,
     ),
 }
 
@@ -220,6 +251,62 @@ TEMPLATES = {
         "What is the emotional tone of this text?",
     ],
 }
+TEMPLATES_V2 = {
+    **TEMPLATES,
+    "dbpedia": [
+        *TEMPLATES["dbpedia"],
+        "Which topic category fits this text?",
+        "What kind of topic does this encyclopedia article cover?",
+        "Classify the topic of this entry.",
+    ],
+    "sib200": [
+        *TEMPLATES["sib200"],
+        "Which topic best fits this text?",
+        "Identify the topic of this short text.",
+        "What is the general topic of this sentence?",
+    ],
+    "boolq": [
+        *TEMPLATES["boolq"],
+        "Is the statement supported by the text as yes?",
+        "From the passage, is the answer to the question true?",
+        "Does the text imply an affirmative answer?",
+    ],
+    "goemotions": [
+        *TEMPLATES["goemotions"],
+        "How positive or negative is this reaction?",
+        "Rate the sentiment expressed in this text.",
+        "What is the overall sentiment polarity here?",
+    ],
+}
+TEMPLATES_V3 = {
+    **TEMPLATES_V2,
+    "dbpedia": [
+        *TEMPLATES_V2["dbpedia"],
+        "Which news category or domain describes this text?",
+        "Classify the general subject area of this document.",
+        "What is the domain or topic of this article?",
+    ],
+    "sib200": [
+        *TEMPLATES_V2["sib200"],
+        "Which news topic best fits this article or report?",
+        "What is the topic area of this news story?",
+        "Classify the subject domain of this text.",
+        "Which general topic category does this report belong to?",
+    ],
+    "boolq": [
+        *TEMPLATES_V2["boolq"],
+        "Based on the provided passage, is the answer to the question yes?",
+        "Does the passage confirm that the answer to the question is affirmative?",
+        "According to the text, is the statement answered with true?",
+        "Does the passage support a yes answer to the question?",
+    ],
+    "goemotions": [
+        *TEMPLATES_V2["goemotions"],
+        "How positive is the sentiment of this review or comment?",
+        "Rate the sentiment polarity of this text on a 5-level scale.",
+        "What is the emotional positivity rating of this review?",
+    ],
+}
 
 # Broad mixture: extra question types per source, (type, count).
 VIEWS = {
@@ -231,6 +318,14 @@ VIEWS = {
     "civil": [("noul", 1000)],
     "snli": [("choice", 2000)],
     "mnli": [("choice", 3000)],
+}
+VIEWS_V2 = {
+    **VIEWS,
+    "dbpedia": [("noul", 2000)],
+}
+VIEWS_V3 = {
+    **VIEWS_V2,
+    "sib200": [("noul", 2000)],
 }
 NLI_CRITERIA = [
     ("entailment", "the hypothesis follows"),
@@ -306,6 +401,12 @@ def polarity(names: list[str]) -> int | None:
     return levels.pop() if len(levels) == 1 and None not in levels else None
 
 
+def polarity_5level(names: list[str]) -> int | None:
+    """GoEmotions labels → 0..4 (5-level sentiment); None when ambiguous or mixed."""
+    levels = {POLARITY_5.get(n) for n in names}
+    return levels.pop() if len(levels) == 1 and None not in levels else None
+
+
 def nli_records(name: str) -> list[tuple[str, dict, int]]:
     """[(lang, {premise, hypothesis}, label)] with label 0 entailment, 1 neutral, 2 contradiction."""
     path = _paths(SOURCES[name])[0]
@@ -320,7 +421,7 @@ def nli_records(name: str) -> list[tuple[str, dict, int]]:
     ]
 
 
-def records(name: str) -> list[tuple[str, object, object]]:
+def records(name: str, five_level: bool = False) -> list[tuple[str, object, object]]:
     """[(lang, state, gold)] for one source; gold is a label name, a bool (noul), or a level index (score)."""
     src = SOURCES[name]
     paths = _paths(src)
@@ -360,7 +461,8 @@ def records(name: str) -> list[tuple[str, object, object]]:
         meta = json.loads(pq.read_schema(paths[0]).metadata[b"huggingface"])
         names = meta["info"]["features"]["labels"]["feature"]["names"]
         rows = pq.read_table(paths[0], columns=["text", "labels"]).to_pylist()
-        levels = [(r["text"], polarity([names[i] for i in r["labels"]])) for r in rows]
+        pol_fn = polarity_5level if five_level else polarity
+        levels = [(r["text"], pol_fn([names[i] for i in r["labels"]])) for r in rows]
         return [("en", text, lv) for text, lv in levels if lv is not None]
     raise ValueError(f"unknown source {name}")
 
@@ -374,7 +476,16 @@ def sample_choice(gold: str, labels: list[str], rng: np.random.Generator) -> tup
     return names, names.index(gold)
 
 
-def make_example(name: str, lang: str, state: object, gold, labels: list[str], rng: np.random.Generator) -> dict:
+def make_example(
+    name: str,
+    lang: str,
+    state: object,
+    gold,
+    labels: list[str],
+    rng: np.random.Generator,
+    five_level: bool = False,
+    templates: dict[str, list[str]] | None = None,
+) -> dict:
     qtype = SOURCES[name].type
     if qtype == "choice":
         cands, g = sample_choice(gold, labels, rng)
@@ -382,9 +493,12 @@ def make_example(name: str, lang: str, state: object, gold, labels: list[str], r
         cands, g = ["true", "false"], 0 if gold else 1
     elif name == "civil":
         cands, g = list(CIVIL_LEVELS), int(gold)
+    elif five_level:
+        cands, g = list(SENTIMENT_5_LEVELS[int(rng.integers(len(SENTIMENT_5_LEVELS)))]), int(gold)
     else:
         cands, g = list(SENTIMENT_LEVELS[int(rng.integers(len(SENTIMENT_LEVELS)))]), int(gold)
-    return _example(name, lang, qtype, state, TEMPLATES[name][int(rng.integers(len(TEMPLATES[name])))], cands, g)
+    tmpls = (templates or TEMPLATES)[name]
+    return _example(name, lang, qtype, state, tmpls[int(rng.integers(len(tmpls)))], cands, g)
 
 
 def _example(name: str, lang: str, qtype: str, state: object, instructions: str, cands: list, gold: int) -> dict:
@@ -419,14 +533,23 @@ def drop_leaked(recs: list, held: set[str]) -> list:
 
 
 def source_examples(
-    name: str, recs: list, scale: float, rng: np.random.Generator, cap: int | None = None
+    name: str,
+    recs: list,
+    scale: float,
+    rng: np.random.Generator,
+    cap: int | None = None,
+    five_level: bool = False,
+    templates: dict[str, list[str]] | None = None,
 ) -> list[dict]:
     src = SOURCES[name]
     cap = int((cap or src.cap) * scale)
+    level_groups = dict(LEVEL_GROUPS)
+    if five_level:
+        level_groups["goemotions"] = 5
     if name in LANG_GROUPS:  # even split per language
         groups = {lg: [r for r in recs if r[0] == lg] for lg in LANG_GROUPS[name]}
-    elif name in LEVEL_GROUPS:  # stratified per level
-        groups = {lv: [r for r in recs if r[2] == lv] for lv in range(LEVEL_GROUPS[name])}
+    elif name in level_groups:  # stratified per level
+        groups = {lv: [r for r in recs if r[2] == lv] for lv in range(level_groups[name])}
     else:
         groups = {"": recs}
     per = cap // len(groups)
@@ -435,13 +558,24 @@ def source_examples(
         raise SystemExit(f"{name}: groups below {per} rows: {short}")
     picked = [r for g in groups.values() for r in _pick(g, per, rng)]
     labels = sorted({r[2] for r in recs}) if src.type == "choice" else []
-    return [make_example(name, lang, state, gold, labels, rng) for lang, state, gold in picked]
+    return [
+        make_example(name, lang, state, gold, labels, rng, five_level=five_level, templates=templates)
+        for lang, state, gold in picked
+    ]
 
 
-def view_examples(name: str, recs: list, scale: float, held: set[str], rng: np.random.Generator) -> list[dict]:
+def view_examples(
+    name: str,
+    recs: list,
+    scale: float,
+    held: set[str],
+    rng: np.random.Generator,
+    views_map: dict | None = None,
+) -> list[dict]:
     """Broad mixture: the source's rows re-asked as another question type (VIEWS)."""
     out = []
-    for qtype, count in VIEWS.get(name, []):
+    views = (views_map or VIEWS).get(name, [])
+    for qtype, count in views:
         n = int(count * scale)
         if name in DOMAINS:  # noul: is the gold label, or a random other label, the right one?
             labels = sorted({r[2] for r in recs})
@@ -511,23 +645,35 @@ def build(
 ) -> tuple[list[dict], dict]:
     """One mixture's sources, leakage-filtered and shuffled. Returns (examples, meta with mixture and train sha256)."""
     held = suite_states(data_dir)
-    broad = mixture == "broad"
+    broad = mixture in ("broad", "broad_v2", "broad_v3")
+    is_v2 = mixture in ("broad_v2", "broad_v3")
+    is_v3 = mixture == "broad_v3"
     cached: dict[str, list] = {}  # DOMAINS records, read once for the label pools and once for sampling
     labels_by_domain: dict[str, list[str]] = {}
     if broad:
         pools: dict[str, set[str]] = {}
         for name, dom in DOMAINS.items():
-            cached[name] = records(name)
+            cached[name] = records(name, five_level=is_v2 and name == "goemotions")
             pools.setdefault(dom, set()).update(r[2] for r in cached[name])
         labels_by_domain = {d: sorted(v) for d, v in pools.items()}
     out, meta = [], {"mixture": mixture}
+    templates_map = TEMPLATES_V3 if is_v3 else (TEMPLATES_V2 if is_v2 else TEMPLATES)
+    views_map = VIEWS_V3 if is_v3 else (VIEWS_V2 if is_v2 else VIEWS)
     for i, name in enumerate(SOURCES):
         if name not in MIXTURES[mixture]:
             continue
         rng = np.random.default_rng([seed, i])
-        recs = cached.pop(name) if name in cached else records(name)
+        recs = cached.pop(name) if name in cached else records(name, five_level=is_v2 and name == "goemotions")
         kept = drop_leaked(recs, held)
-        exs = source_examples(name, kept, scale, rng, CAPS.get(mixture, {}).get(name))
+        exs = source_examples(
+            name,
+            kept,
+            scale,
+            rng,
+            CAPS.get(mixture, {}).get(name),
+            five_level=is_v2 and name == "goemotions",
+            templates=templates_map,
+        )
         src = SOURCES[name]
         meta[name] = {
             "repo": src.repo,
@@ -537,7 +683,14 @@ def build(
             "dropped_leaked": len(recs) - len(kept),
         }
         if broad:
-            views = view_examples(name, kept, scale, held, np.random.default_rng([seed, i, 1]))
+            views = view_examples(
+                name,
+                kept,
+                scale,
+                held,
+                np.random.default_rng([seed, i, 1]),
+                views_map=views_map,
+            )
             meta[name]["views"] = dict(Counter(e["type"] for e in views))
             exs = [
                 augment(ex, labels_by_domain, np.random.default_rng([seed, i, 2, j]))
