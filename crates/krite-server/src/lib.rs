@@ -14,6 +14,8 @@ use krite_core::ApiError;
 use krite_runtime::{Backend, JEV_ALIAS, Runtime};
 use serde_json::json;
 
+mod jev;
+
 /// axum's own limit; bodies between the protocol limit (4 MiB) and this get the Protocol 422, not a plain 413.
 const AXUM_BODY_LIMIT: usize = 16 * 1024 * 1024;
 
@@ -100,7 +102,7 @@ async fn systemone<B: Backend>(State(app): State<App<B>>, body: Bytes) -> Respon
     let rt = app.rt.clone();
     let decided = tokio::task::spawn_blocking(move || {
         let mut rt = rt.lock().map_err(|_| ApiError::internal("runtime lock poisoned by an earlier panic"))?;
-        rt.decide(&req)
+        if let Some(d) = jev::try_handle_jev(&mut *rt, &req)? { Ok(d) } else { rt.decide(&req) }
     })
     .await
     .unwrap_or_else(|e| Err(ApiError::internal(format!("decision task failed: {e}"))));

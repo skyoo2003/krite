@@ -166,6 +166,15 @@ impl<B: Backend> Runtime<B> {
     }
 
     pub fn decide(&mut self, req: &Request) -> Result<Decision, ApiError> {
+        self.decide_internal(req, false)
+    }
+
+    /// Serves decisions with optional raw softmax temperature (1.0), bypassing calibration scaling.
+    pub fn decide_with_temperature(&mut self, req: &Request, raw: bool) -> Result<Decision, ApiError> {
+        self.decide_internal(req, raw)
+    }
+
+    fn decide_internal(&mut self, req: &Request, raw: bool) -> Result<Decision, ApiError> {
         krite_core::validate(req, &self.limits)?;
         if let Some(m) = req.model.as_deref().filter(|m| *m != self.backend.model_id() && *m != JEV_ALIAS) {
             let msg = format!("unknown model {m:?}; this server runs {:?}", self.backend.model_id());
@@ -230,7 +239,8 @@ impl<B: Backend> Runtime<B> {
         let mut answers = BTreeMap::new();
         for ((id, q), (start, k)) in req.questions.iter().zip(spans) {
             let e = &energies[start..start + k];
-            let p = if k == 1 { vec![1.0] } else { softmax(e, self.calibrator.temperature(bucket(q.kind(), k))) };
+            let temp = if raw { 1.0 } else { self.calibrator.temperature(bucket(q.kind(), k)) };
+            let p = if k == 1 { vec![1.0] } else { softmax(e, temp) };
             answers.insert(id.clone(), answer(q, p));
         }
         timing.calibrate_ms = ms(t);
